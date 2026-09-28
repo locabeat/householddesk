@@ -1,0 +1,16 @@
+{
+  "name": "Household Desk",
+  "short_name": "Household",
+  "description": "Προσωπικά έσοδα, έξοδα και δανεικά",
+  "lang": "el",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#061619",
+  "theme_color": "#0b5563",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
