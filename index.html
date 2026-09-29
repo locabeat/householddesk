@@ -21,6 +21,10 @@
 <header class="topbar">
   <h1 id="title">Household Desk</h1>
   <span class="spinner" aria-hidden="true"></span>
+  <button id="houseBtn" class="icon-btn light cart" aria-label="Σπίτι">
+    <svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5"/></svg>
+    <span id="houseBadge" class="badge" hidden></span>
+  </button>
   <button id="shopBtn" class="icon-btn light cart" aria-label="Ψώνια">
     <svg viewBox="0 0 24 24"><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6.2"/><circle cx="10" cy="20.5" r="1.3"/><circle cx="17" cy="20.5" r="1.3"/></svg>
     <span id="shopBadge" class="badge" hidden></span>
@@ -41,6 +45,7 @@
   </button>
   <button id="addBtn" class="fab" aria-label="Νέα καταχώρηση">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    <span id="dueBadge" class="badge" hidden></span>
   </button>
   <button data-tab="loans">
     <svg viewBox="0 0 24 24"><path d="M7 7h13l-4-4M17 17H4l4 4"/></svg>Δανεικά

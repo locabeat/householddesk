@@ -14,16 +14,27 @@ const DEFAULT_PROFILE = 'Άννα'; // σε αυτό ανήκουν οι παλ�
 const PHOTO_FOLDER = 'Household Desk — Φωτογραφίες';
 
 const SHEETS = {
-  tx:    { name: 'Κινήσεις',   cols: { date: 'Ημερομηνία', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', note: 'Σημείωση', profile: 'Προφίλ', id: 'ID' } },
+  tx:    { name: 'Κινήσεις',   cols: { date: 'Ημερομηνία', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', note: 'Σημείωση', acc: 'Ταμείο', to: 'Προς ταμείο', profile: 'Προφίλ', id: 'ID' } },
+  // Ταμεία (Μετρητά, τράπεζες…): από πού βγαίνουν / πού μπαίνουν τα λεφτά κάθε κίνησης.
+  acc:   { name: 'Ταμεία',     cols: { name: 'Όνομα', icon: 'Εικονίδιο', start: 'Αρχικό υπόλοιπο', profile: 'Προφίλ', id: 'ID' } },
+  // Πάγια: επαναλαμβανόμενες χρεώσεις (κάθε <every> <unit>), με την ημερομηνία της επόμενης.
+  rec:   { name: 'Πάγια',      cols: { name: 'Όνομα', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', acc: 'Ταμείο', every: 'Κάθε', unit: 'Περίοδος', next: 'Επόμενη χρέωση', profile: 'Προφίλ', id: 'ID' } },
+  // Γρήγορες καταχωρήσεις: έτοιμα κουμπιά για συχνές κινήσεις (ποσό κενό = ρωτάει).
+  quick: { name: 'Γρήγορες',   cols: { name: 'Όνομα', icon: 'Εικονίδιο', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', acc: 'Ταμείο', profile: 'Προφίλ', id: 'ID' } },
   loan:  { name: 'Δανεικά',    cols: { date: 'Ημερομηνία', type: 'Τύπος', person: 'Άτομο', amount: 'Ποσό', note: 'Σημείωση', paid: 'Ξοφλήθηκε', profile: 'Προφίλ', id: 'ID' } },
   cat:   { name: 'Κατηγορίες', cols: { type: 'Τύπος', cat: 'Κατηγορία', sub: 'Υποκατηγορία', profile: 'Προφίλ', id: 'ID' } },
   lists: { name: 'Λίστες', shared: true, cols: { name: 'Όνομα', icon: 'Εικονίδιο', id: 'ID' } },
   shop:  { name: 'Ψώνια',  shared: true, cols: { list: 'Λίστα', name: 'Προϊόν', qty: 'Ποσότητα', note: 'Σημείωση', photo: 'Φωτογραφία', addedBy: 'Πρόσθεσε', done: 'Αγοράστηκε', doneBy: 'Από', doneAt: 'Πότε', id: 'ID' } },
+  // Σπίτι (κοινά): έξοδα με το ποιος πλήρωσε και πώς μοιράζονται, και εξοφλήσεις μεταξύ σας.
+  // «Μερίδιο άλλου %» = πόσο από το ποσό αναλογεί σε αυτόν που ΔΕΝ πλήρωσε (50 = μισά-μισά).
+  house:    { name: 'Σπίτι', shared: true, cols: { date: 'Ημερομηνία', kind: 'Είδος', cat: 'Κατηγορία', amount: 'Ποσό', note: 'Σημείωση', paidBy: 'Πλήρωσε', owedBy: 'Για / Προς', share: 'Μερίδιο άλλου %', payAcc: 'Ταμείο πληρωτή', recvAcc: 'Ταμείο παραλήπτη', addedBy: 'Πρόσθεσε', id: 'ID' } },
+  houseCat: { name: 'Κατηγορίες Σπιτιού', shared: true, cols: { name: 'Όνομα', icon: 'Εικονίδιο', id: 'ID' } },
+  houseRec: { name: 'Πάγια Σπιτιού', shared: true, cols: { name: 'Όνομα', cat: 'Κατηγορία', amount: 'Ποσό', paidBy: 'Πληρώνει', share: 'Μερίδιο άλλου %', every: 'Κάθε', unit: 'Περίοδος', next: 'Επόμενη χρέωση', id: 'ID' } },
   // Αποθηκευμένα προϊόντα: κρατάνε τη φωτογραφία ώστε να ξαναχρησιμοποιείται.
   prod:  { name: 'Προϊόντα', shared: true, cols: { name: 'Όνομα', photo: 'Φωτογραφία', list: 'Λίστα', id: 'ID' } },
 };
 // Στήλες που προστίθενται αυτόματα αν λείπουν από το φύλλο.
-const AUTO_COLS = ['profile', 'id'];
+const AUTO_COLS = ['acc', 'to', 'profile', 'id'];
 // Στήλες που δεν μετράνε για να θεωρηθεί μια γραμμή «γεμάτη».
 const META_COLS = ['paid', 'done', 'profile', 'id'];
 
@@ -39,6 +50,8 @@ const STARTER_CATS = [
   ['Έξοδο', 'Διασκέδαση', ''], ['Έξοδο', 'Υγεία', ''], ['Έξοδο', 'Άλλα', ''],
 ];
 const STARTER_LISTS = [['Σούπερ μάρκετ', '🛒'], ['IKEA', '🛋️']];
+const STARTER_HOUSE_CATS = [['Ενοίκιο', '🏠'], ['Ρεύμα', '⚡'], ['Νερό', '💧'], ['Internet', '🌐'], ['Κοινόχρηστα', '🏢'],
+  ['Σούπερ μάρκετ', '🛒'], ['Είδη σπιτιού', '🧽'], ['Φαγητό', '🍕'], ['Άλλο', '📦']];
 
 function doGet() {
   return json_({ ok: true, data: 'Household Desk API' });
@@ -59,9 +72,11 @@ function doPost(e) {
       case 'all':
         if (!read_('cat', profile).length) seedCats_(profile);
         if (!read_('lists', profile).length) STARTER_LISTS.forEach(([name, icon]) => add_('lists', { name, icon }, profile));
+        if (!read_('houseCat', profile).length) STARTER_HOUSE_CATS.forEach(([name, icon]) => add_('houseCat', { name, icon }, profile));
         res = {
-          profile,
-          tx: read_('tx', profile), loan: read_('loan', profile), cat: read_('cat', profile),
+          profile, members: members_(),
+          house: read_('house', profile), houseCat: read_('houseCat', profile), houseRec: read_('houseRec', profile),
+          tx: read_('tx', profile), acc: read_('acc', profile), rec: read_('rec', profile), quick: read_('quick', profile), loan: read_('loan', profile), cat: read_('cat', profile),
           lists: read_('lists', profile), shop: read_('shop', profile), prod: read_('prod', profile),
         };
         break;
@@ -70,6 +85,8 @@ function doPost(e) {
       case 'delete':      res = remove_(p.sheet, p.id, profile); break;
       case 'renameCat':   res = renameCat_(p, profile); break;
       case 'deleteCat':   res = deleteCat_(p, profile); break;
+      case 'renameAcc':   res = renameAcc_(p, profile); break;
+      case 'renameHouseCat': res = renameHouseCat_(p, profile); break;
       case 'renameList':  res = renameList_(p, profile); break;
       case 'deleteList':  res = deleteList_(p, profile); break;
       case 'clearDone':   res = clearDone_(p, profile); break;
@@ -102,6 +119,12 @@ function profileForPin_(pin) {
     if (k.indexOf('PIN_') === 0 && str_(props[k]) === pin) return k.slice(4).trim();
   }
   return null;
+}
+
+/** Όλα τα προφίλ (όσοι έχουν PIN) — για το «ποιος πλήρωσε» στο Σπίτι. */
+function members_() {
+  const props = PropertiesService.getScriptProperties().getProperties();
+  return Object.keys(props).filter(k => k.indexOf('PIN_') === 0).map(k => k.slice(4).trim()).sort();
 }
 
 /** Αλλαγή του PIN του συνδεδεμένου προφίλ (το τρέχον PIN έχει ήδη ελεγχθεί). */
@@ -185,11 +208,11 @@ function read_(key, profile) {
 }
 
 function toCell_(k, v) {
-  if (k === 'date') {
+  if (k === 'date' || k === 'next') {
     const s = str_(v);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? Utilities.parseDate(s, tz_(), 'yyyy-MM-dd') : s;
   }
-  if (k === 'amount') return Number(v) || 0;
+  if (k === 'amount' || k === 'start' || k === 'share') return Number(v) || 0;
   if (k === 'paid' || k === 'done') return v === true || v === 'true';
   if (k === 'doneAt') return v instanceof Date ? v : str_(v);
   return str_(v);
@@ -207,6 +230,7 @@ function add_(key, row, profile) {
     // Ίδιο προϊόν με πριν: παίρνει την αποθηκευμένη φωτογραφία του.
     row.photo = rememberProduct_(row.name, row.photo, row.list);
   }
+  if (key === 'house') row.addedBy = profile;
   const inf = info_(key);
   const out = new Array(inf.width).fill('');
   row.id = Utilities.getUuid();
@@ -358,6 +382,53 @@ function deleteCat_(p, profile) {
   // Αν σβήστηκε η τελευταία υποκατηγορία, η κατηγορία μένει (χωρίς υποκατηγορίες).
   if (sub && !read_('cat', profile).some(r => str_(r.type) === str_(p.type) && str_(r.cat) === str_(p.cat))) {
     add_('cat', { type: p.type, cat: p.cat, sub: '' }, profile);
+  }
+  return {};
+}
+
+/* ---------- Ταμεία ---------- */
+
+/** Αλλαγή ταμείου (όνομα, εικονίδιο, αρχικό υπόλοιπο) — το νέο όνομα περνάει και στις κινήσεις του. */
+function renameAcc_(p, profile) {
+  const name = str_(p.name);
+  if (!name) throw new Error('Κενό όνομα');
+  const acc = info_('acc');
+  const i = findRow_(acc, p.id, profile);
+  const clash = acc.rows.some((r, j) => j !== i && acc.mine(r, profile) && low_(r[acc.idx.name]) === low_(name));
+  if (clash) throw new Error('Υπάρχει ήδη ταμείο με αυτό το όνομα');
+  const old = str_(acc.rows[i][acc.idx.name]);
+  acc.sh.getRange(i + 2, acc.idx.name + 1).setValue(name);
+  if ('icon' in p) acc.sh.getRange(i + 2, acc.idx.icon + 1).setValue(str_(p.icon));
+  if ('start' in p) acc.sh.getRange(i + 2, acc.idx.start + 1).setValue(toCell_('start', p.start));
+  if (old !== name) {
+    const tx = info_('tx');
+    ['acc', 'to'].forEach(col => {
+      let changed = false;
+      tx.rows.forEach(r => { if (tx.mine(r, profile) && str_(r[tx.idx[col]]) === old) { r[tx.idx[col]] = name; changed = true; } });
+      if (changed) tx.sh.getRange(2, tx.idx[col] + 1, tx.rows.length, 1).setValues(tx.rows.map(r => [r[tx.idx[col]]]));
+    });
+  }
+  return {};
+}
+
+/* ---------- Σπίτι ---------- */
+
+/** Μετονομασία κατηγορίας σπιτιού (και εικονιδίου) — περνάει και στα έξοδα/πάγια του σπιτιού. */
+function renameHouseCat_(p, profile) {
+  const name = str_(p.name);
+  if (!name) throw new Error('Κενό όνομα');
+  const cats = info_('houseCat');
+  const i = findRow_(cats, p.id, profile);
+  const old = str_(cats.rows[i][cats.idx.name]);
+  cats.sh.getRange(i + 2, cats.idx.name + 1).setValue(name);
+  if ('icon' in p) cats.sh.getRange(i + 2, cats.idx.icon + 1).setValue(str_(p.icon));
+  if (old !== name) {
+    ['house', 'houseRec'].forEach(key => {
+      const inf = info_(key);
+      let changed = false;
+      inf.rows.forEach(r => { if (str_(r[inf.idx.cat]) === old) { r[inf.idx.cat] = name; changed = true; } });
+      if (changed) inf.sh.getRange(2, inf.idx.cat + 1, inf.rows.length, 1).setValues(inf.rows.map(r => [r[inf.idx.cat]]));
+    });
   }
   return {};
 }
