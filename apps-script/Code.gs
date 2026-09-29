@@ -64,22 +64,14 @@ function doPost(e) {
   const profile = profileForPin_(p.pin);
   if (!profile) return json_({ ok: false, error: 'Λάθος PIN' });
 
+  // Οι αναγνώσεις δεν περιμένουν στην ουρά πίσω από τις αλλαγές (το κλείδωμα είναι μόνο για εγγραφές).
+  const needLock = p.action !== 'all' && p.action !== 'photo';
   const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  if (needLock) lock.waitLock(20000);
   try {
     let res;
     switch (p.action) {
-      case 'all':
-        if (!read_('cat', profile).length) seedCats_(profile);
-        if (!read_('lists', profile).length) STARTER_LISTS.forEach(([name, icon]) => add_('lists', { name, icon }, profile));
-        if (!read_('houseCat', profile).length) STARTER_HOUSE_CATS.forEach(([name, icon]) => add_('houseCat', { name, icon }, profile));
-        res = {
-          profile, members: members_(),
-          house: read_('house', profile), houseCat: read_('houseCat', profile), houseRec: read_('houseRec', profile),
-          tx: read_('tx', profile), acc: read_('acc', profile), rec: read_('rec', profile), quick: read_('quick', profile), loan: read_('loan', profile), cat: read_('cat', profile),
-          lists: read_('lists', profile), shop: read_('shop', profile), prod: read_('prod', profile),
-        };
-        break;
+      case 'all':         res = all_(profile); break;
       case 'add':         res = add_(p.sheet, p.row || {}, profile); break;
       case 'update':      res = update_(p.sheet, p.row || {}, profile); break;
       case 'delete':      res = remove_(p.sheet, p.id, profile); break;
@@ -99,7 +91,37 @@ function doPost(e) {
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
   } finally {
-    lock.releaseLock();
+    if (needLock) lock.releaseLock();
+  }
+}
+
+/** Όλα τα δεδομένα του προφίλ με μία φόρτωση: κάθε φύλλο διαβάζεται μία φορά. */
+function all_(profile) {
+  MEMO_ = {};
+  try {
+    const needsSeed = () => !read_('cat', profile).length || !read_('lists', profile).length || !read_('houseCat', profile).length;
+    if (needsSeed()) {
+      // Πρώτη είσοδος: αρχικές κατηγορίες/λίστες, με κλείδωμα ώστε να μη γραφτούν διπλές.
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        MEMO_ = {};
+        if (!read_('cat', profile).length) seedCats_(profile);
+        if (!read_('lists', profile).length) STARTER_LISTS.forEach(([name, icon]) => add_('lists', { name, icon }, profile));
+        if (!read_('houseCat', profile).length) STARTER_HOUSE_CATS.forEach(([name, icon]) => add_('houseCat', { name, icon }, profile));
+      } finally {
+        lock.releaseLock();
+      }
+      MEMO_ = {};
+    }
+    return {
+      profile, members: members_(),
+      house: read_('house', profile), houseCat: read_('houseCat', profile), houseRec: read_('houseRec', profile),
+      tx: read_('tx', profile), acc: read_('acc', profile), rec: read_('rec', profile), quick: read_('quick', profile), loan: read_('loan', profile), cat: read_('cat', profile),
+      lists: read_('lists', profile), shop: read_('shop', profile), prod: read_('prod', profile),
+    };
+  } finally {
+    MEMO_ = null;
   }
 }
 
@@ -137,19 +159,31 @@ function changePin_(p, profile) {
 }
 
 /** Διαβάζει ένα φύλλο, βρίσκει τις στήλες από τις επικεφαλίδες, προσθέτει ό,τι λείπει. */
+// Μνήμη μίας φόρτωσης (μόνο στο 'all', που κυρίως διαβάζει): κάθε φύλλο διαβάζεται μία φορά.
+let MEMO_ = null;
+function forget_(key) { if (MEMO_) delete MEMO_[key]; }
+
 function info_(key) {
   const def = SHEETS[key];
   if (!def) throw new Error('Άγνωστο φύλλο');
+  if (MEMO_ && MEMO_[key]) return MEMO_[key];
   const ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(def.name);
+  let sh;
+  if (MEMO_) {
+    if (!MEMO_.$sheets) { MEMO_.$sheets = {}; ss.getSheets().forEach(s => { MEMO_.$sheets[s.getName()] = s; }); }
+    sh = MEMO_.$sheets[def.name];
+  } else sh = ss.getSheetByName(def.name);
   if (!sh) {
     sh = ss.insertSheet(def.name);
     const heads = Object.keys(def.cols).map(k => def.cols[k]);
     sh.getRange(1, 1, 1, heads.length).setValues([heads]).setFontWeight('bold');
     sh.setFrozenRows(1);
+    if (MEMO_ && MEMO_.$sheets) MEMO_.$sheets[def.name] = sh;
   }
 
-  let header = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(str_);
+  // Όλο το φύλλο με μία ανάγνωση (επικεφαλίδες + γραμμές).
+  let values = sh.getDataRange().getValues();
+  let header = values[0].map(str_);
   let c = header.length;
   while (c > 0 && !header[c - 1]) c--;
   let added = false;
@@ -159,7 +193,10 @@ function info_(key) {
       added = true;
     }
   });
-  if (added) header = sh.getRange(1, 1, 1, c).getValues()[0].map(str_);
+  if (added) {
+    values = sh.getDataRange().getValues();
+    header = values[0].map(str_);
+  }
 
   const idx = {};
   for (const k in def.cols) {
@@ -169,8 +206,7 @@ function info_(key) {
   }
 
   const width = header.length;
-  const n = sh.getLastRow() - 1;
-  let rows = n > 0 ? sh.getRange(2, 1, n, width).getValues() : [];
+  let rows = values.slice(1);
 
   // Τα checkbox (FALSE) μετράνε ως περιεχόμενο, οπότε κόβουμε τις άδειες γραμμές στο τέλος.
   const isData = r => Object.keys(idx).some(k => META_COLS.indexOf(k) < 0 && str_(r[idx[k]]) !== '');
@@ -189,7 +225,9 @@ function info_(key) {
   if (changedProfile) sh.getRange(2, idx.profile + 1, rows.length, 1).setValues(rows.map(r => [r[idx.profile]]));
 
   const mine = (r, profile) => isData(r) && (def.shared || str_(r[idx.profile]) === profile);
-  return { sh, def, idx, width, rows, isData, mine };
+  const inf = { sh, def, idx, width, rows, isData, mine };
+  if (MEMO_) MEMO_[key] = inf;
+  return inf;
 }
 
 function read_(key, profile) {
@@ -244,6 +282,7 @@ function add_(key, row, profile) {
   if (!inf.def.shared) row.profile = profile;
   for (const k in inf.idx) out[inf.idx[k]] = toCell_(k, row[k]);
   inf.sh.getRange(inf.rows.length + 2, 1, 1, inf.width).setValues([out]);
+  forget_(key);
   return { id: row.id, addedBy: row.addedBy, photo: row.photo };
 }
 
@@ -353,6 +392,7 @@ function seedCats_(profile) {
     return r;
   });
   inf.sh.getRange(inf.rows.length + 2, 1, out.length, inf.width).setValues(out);
+  forget_('cat');
 }
 
 /** Μετονομασία κατηγορίας (ή υποκατηγορίας αν δοθεί sub) — αλλάζει και τις παλιές κινήσεις του ίδιου προφίλ. */

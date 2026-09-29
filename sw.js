@@ -1,6 +1,6 @@
 // Κρατάει τα αρχεία του app για να ανοίγει γρήγορα και χωρίς internet.
 // Αλλάζεις τον αριθμό σε κάθε νέα έκδοση ώστε να ανανεωθεί η cache.
-const CACHE = 'household-v10';
+const CACHE = 'household-v12';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

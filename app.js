@@ -33,12 +33,16 @@ const round2 = n => Math.round(n * 100) / 100;
 
 function isoDate(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function ymOf(iso) { return String(iso).slice(0, 7); }
-function fmtDate(iso) { const [y, m, d] = String(iso).split('-'); return d ? `${d}/${m}/${y}` : ''; }
+// Ημερομηνίες όπως στην Ελλάδα: ηη/μμ/εε (π.χ. 29/09/26).
+function fmtDate(iso) { const [y, m, d] = String(iso).split('-'); return d ? `${d.slice(0, 2)}/${m}/${y.slice(-2)}` : ''; }
+/** Κουτάκι ημερομηνίας για πάγια: μεγάλη η μέρα, από κάτω μμ/εε. */
+function recDate(iso) { const [y, m, d] = String(iso).split('-'); return `<span class="rec-date"><b>${d || '?'}</b>${m ? `${m}/${y.slice(-2)}` : ''}</span>`; }
 function monthLabel(ym) { const [y, m] = ym.split('-'); return `${MONTHS[+m - 1]} ${y}`; }
 function dayLabel(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   if (!d) return 'Χωρίς ημερομηνία';
-  return new Date(y, m - 1, d).toLocaleDateString('el-GR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const wd = new Date(y, m - 1, d).toLocaleDateString('el-GR', { weekday: 'long' });
+  return `${wd.charAt(0).toUpperCase() + wd.slice(1)} ${fmtDate(iso)}`;
 }
 function num(v) {
   if (typeof v === 'number') return v;
@@ -293,6 +297,8 @@ async function refresh(silent = false) {
   setBusy(true);
   try {
     data = normalize(await api('all'));
+    // Όσες αλλαγές έγιναν όσο φόρτωνε και δεν έχουν σταλεί ακόμα, να μη χαθούν από την οθόνη.
+    for (const op of pending()) applyLocal(op.action, op.payload, guessRes(op.action, op.payload));
     saveData();
     if (ui.tab === 'login') ui.tab = 'home';
     render();
@@ -313,12 +319,14 @@ async function refresh(silent = false) {
 const QUEUEABLE = ['add', 'update', 'delete'];
 const OFFLINE = 'Δεν υπάρχει σύνδεση';
 const isOffline = e => e && e.message === OFFLINE;
+let offline = false;   // η τελευταία αποστολή απέτυχε επειδή δεν υπήρχε internet
 const pending = () => store.get('household.queue', []);
 function setPending(q) { store.set('household.queue', q); showPending(); }
 function showPending() {
   const n = pending().length;
   const el = $('#pending');
-  el.hidden = !n || !loggedIn();
+  // Η ένδειξη φαίνεται μόνο όταν οι αλλαγές περιμένουν επειδή δεν υπάρχει internet (όχι στην κανονική αποστολή).
+  el.hidden = !n || !offline || !loggedIn();
   el.textContent = `📴 ${n}`;
   el.title = `${n} ${n === 1 ? 'αλλαγή περιμένει' : 'αλλαγές περιμένουν'} να σταλεί${n === 1 ? '' : 'ούν'}`;
 }
@@ -334,26 +342,41 @@ function flushQueue() {
   return flushing;
 }
 async function sendPending() {
-  let sent = 0;
-  while (pending().length) {
-    const op = pending()[0];
-    try {
-      await api(op.action, op.payload);
-    } catch (e) {
-      if (isOffline(e) || e.message === 'Λάθος PIN') break;
-      // Π.χ. η εγγραφή σβήστηκε στο μεταξύ από τον άλλον: η αλλαγή δεν γίνεται, συνεχίζουμε.
-      toast('Μια αλλαγή δεν στάλθηκε: ' + e.message, true);
+  const wasOffline = offline;
+  let sent = 0, failed = false, shared = false;
+  setBusy(true);
+  try {
+    while (pending().length) {
+      const op = pending()[0];
+      try {
+        await api(op.action, op.payload);
+        offline = false;
+      } catch (e) {
+        if (isOffline(e)) { offline = true; break; }
+        if (e.message === 'Λάθος PIN') break;
+        // Π.χ. η εγγραφή σβήστηκε στο μεταξύ από τον άλλον: η αλλαγή δεν γίνεται, συνεχίζουμε.
+        toast('Μια αλλαγή δεν στάλθηκε: ' + e.message, true);
+        failed = true;
+      }
+      if (['shop', 'prod'].includes(op.payload.sheet)) shared = true;
+      setPending(pending().slice(1));
+      sent++;
     }
-    setPending(pending().slice(1));
-    sent++;
+  } finally {
+    setBusy(false);
+    showPending();
   }
-  if (sent) toast(`✓ Στάλθηκ${sent === 1 ? 'ε 1 αλλαγή' : `αν ${sent} αλλαγές`} που περίμεναν`);
+  if (sent && wasOffline && !offline) toast(`✓ Στάλθηκ${sent === 1 ? 'ε 1 αλλαγή' : `αν ${sent} αλλαγές`} που περίμεναν`);
+  // Κάτι δεν πέρασε ή ο server συμπλήρωσε κοινά στοιχεία (π.χ. φωτογραφία προϊόντος): φέρνουμε τα σωστά δεδομένα.
+  if (!pending().length && (failed || shared)) refresh(true);
 }
 
 /** Εφαρμόζει μια αλλαγή στα τοπικά δεδομένα (res = ό,τι γύρισε ο server, ή εκτίμηση όταν δεν υπάρχει internet). */
 function applyLocal(action, payload, res = {}) {
   const sheet = payload.sheet;
-  if (action === 'add') data[sheet].push({ ...payload.row, ...res });
+  const same = action === 'add' && data[sheet].find(r => r.id === payload.row.id);
+  if (same) Object.assign(same, payload.row, res);     // υπάρχει ήδη (π.χ. ήρθε από τον server): όχι διπλό
+  else if (action === 'add') data[sheet].push({ ...payload.row, ...res });
   else if (action === 'update') Object.assign(data[sheet].find(r => r.id === payload.row.id) || {}, payload.row, res);
   else if (action === 'delete') data[sheet] = data[sheet].filter(r => r.id !== payload.id);
   data = normalize(data);
@@ -371,38 +394,35 @@ function guessRes(action, payload) {
   return {};
 }
 
-/** Στέλνει μια αλλαγή στο Sheet και ενημερώνει τα τοπικά δεδομένα. Χωρίς internet, την κρατάει για αργότερα. */
+/**
+ * Στέλνει μια αλλαγή στο Sheet. Προσθήκες/αλλαγές/διαγραφές εφαρμόζονται αμέσως στη συσκευή
+ * και στέλνονται στο παρασκήνιο με τη σειρά (ή όταν βρεθεί internet), ώστε το app να μην περιμένει τον server.
+ */
 async function run(action, payload, okMsg) {
-  const canQueue = QUEUEABLE.includes(action) && cfg.url !== 'demo';
   // Κάθε νέα εγγραφή παίρνει ID από τη συσκευή, ώστε να μη γραφτεί ποτέ διπλή.
   if (action === 'add') payload = { ...payload, row: { id: newId(), ...payload.row } };
-  const queueIt = () => {
+  if (QUEUEABLE.includes(action) && cfg.url !== 'demo') {
     setPending([...pending(), { action, payload }]);
     const res = guessRes(action, payload);
     applyLocal(action, payload, res);
     render();
-    toast(`📴 ${okMsg ? okMsg + ' — ' : ''}θα σταλεί μόλις βρεις internet`);
-    return res;
-  };
-  // Αν ήδη περιμένουν αλλαγές, η νέα μπαίνει πίσω τους για να κρατηθεί η σειρά.
-  if (canQueue && pending().length) {
-    const res = queueIt();
-    refresh(true);
-    return res;
+    if (okMsg) toast(offline ? `📴 ${okMsg} — θα σταλεί μόλις βρεις internet` : okMsg);
+    flushQueue();
+    return { ...res, id: payload.row?.id ?? payload.id };
   }
   setBusy(true);
   try {
+    // Οι υπόλοιπες ενέργειες (μετονομασίες κ.λπ.) θέλουν τον server· πρώτα στέλνονται όσα περιμένουν.
+    await flushQueue();
     const res = await api(action, payload);
     const sheet = payload.sheet;
     if (QUEUEABLE.includes(action)) applyLocal(action, payload, res);
     else { data = normalize(await api('all')); saveData(); }
     render();
     if (okMsg) toast(okMsg);
-    // Τα ψώνια είναι κοινά και ο server ενημερώνει και τα αποθηκευμένα προϊόντα: συγχρονισμός στο παρασκήνιο.
-    if (['shop', 'prod', 'house', 'houseCat', 'houseRec'].includes(sheet)) refresh(true);
+    if (['shop', 'prod'].includes(sheet)) refresh(true);
     return res || true;
   } catch (e) {
-    if (canQueue && isOffline(e)) return queueIt();
     toast(isOffline(e) ? '📴 Αυτό χρειάζεται internet' : 'Σφάλμα: ' + e.message, true);
     return false;
   } finally {
@@ -782,7 +802,7 @@ function recCard() {
         const isDue = daysUntil(r.next) <= 0;
         return `
         <div class="rec-row ${isDue ? 'due' : ''}" data-rec="${esc(r.id)}">
-          <span class="rec-date"><b>${+r.next.slice(8)}</b>${MONTHS_SHORT[+r.next.slice(5, 7) - 1]}</span>
+          ${recDate(r.next)}
           <span class="si-main"><b>${esc(r.name)}</b><small>${when(r)}${r.acc ? ` · ${esc(accIcon(r.acc))} ${esc(r.acc)}` : ''}</small></span>
           <span class="amt ${r.type === IN ? 'pos' : 'neg'}">${eur(r.amount)}</span>
           <button class="rec-ok ${isDue ? '' : 'soft'}" data-recpay="${esc(r.id)}" aria-label="Χρεώθηκε">${ICON_CHECK}</button>
@@ -1116,7 +1136,7 @@ function renderHouse(v) {
         const due = daysUntil(r.next) <= 0;
         return `
         <div class="rec-row ${due ? 'due' : ''}" data-hrec="${esc(r.id)}">
-          <span class="rec-date"><b>${+r.next.slice(8)}</b>${MONTHS_SHORT[+r.next.slice(5, 7) - 1]}</span>
+          ${recDate(r.next)}
           <span class="si-main"><b>${esc(houseIcon(r.cat))} ${esc(r.name)}</b><small>πληρώνει ${esc(r.paidBy || '—')}</small></span>
           <span class="amt">${eur(r.amount)}</span>
           <button class="rec-ok ${due ? '' : 'soft'}" data-hrec="${esc(r.id)}" aria-label="Πληρώθηκε">${ICON_CHECK}</button>
@@ -1876,7 +1896,7 @@ function renderFinSettings(v) {
       <p class="small muted" style="margin-top:-6px">Λογαριασμοί και συνδρομές που έρχονται τακτικά. Τη μέρα της χρέωσης εμφανίζονται στην Αρχική για να πατήσεις ✓ Χρεώθηκε.</p>
       ${data.rec.length ? `<div class="list flat">${[...data.rec].sort((a, b) => a.next.localeCompare(b.next)).map(r => `
         <button class="shop-item prod-row" data-recid="${esc(r.id)}">
-          <span class="rec-date"><b>${+r.next.slice(8) || '?'}</b>${MONTHS_SHORT[+r.next.slice(5, 7) - 1] || ''}</span>
+          ${recDate(r.next)}
           <span class="si-main"><b>${esc(r.name)}</b><small>${esc(freqLabel(r))}${r.acc ? ` · ${esc(accIcon(r.acc))} ${esc(r.acc)}` : ''}</small></span>
           <span class="amt ${r.type === IN ? 'pos' : 'neg'}">${eur(r.amount)}</span>
         </button>`).join('')}</div>
