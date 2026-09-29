@@ -1,7 +1,7 @@
 // Κρατάει τα αρχεία του app για να ανοίγει γρήγορα και χωρίς internet.
 // Αλλάζεις τον αριθμό σε κάθε νέα έκδοση ώστε να ανανεωθεί η cache.
-const CACHE = 'household-v22';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon.png'];
+const CACHE = 'household-v23';
+const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png?v=2', 'icons/icon-512.png?v=2', 'icons/apple-touch-icon.png?v=2', 'icons/favicon.png?v=2'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(a => new Request(a, { cache: 'reload' })))).then(() => self.skipWaiting()));

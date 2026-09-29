@@ -2157,7 +2157,7 @@ function renderFinSettings(v) {
 function renderLogin(v) {
   v.innerHTML = `
     <div class="login">
-      <div class="login-logo"><img src="icons/icon-192.png" alt=""></div>
+      <div class="login-logo"><img src="icons/icon-192.png?v=2" alt=""></div>
       <h1>Household Desk</h1>
       <p class="muted">Βάλε το PIN σου για να μπεις</p>
       <section class="card">
