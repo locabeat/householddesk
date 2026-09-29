@@ -1471,7 +1471,7 @@ function openHouseRecForm(r) {
       <div class="row2">
         <label class="field" style="margin:0"><span>Κάθε πότε</span>
           <select id="hrFreq">${freqs.map(([n, u, l]) => `<option value="${n}|${u}" ${n === f.every && u === f.unit ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label class="field" style="margin:0"><span>Επόμενη πληρωμή</span><input id="hrNext" type="date" value="${esc(f.next)}"></label>
+        <label class="field" style="margin:0"><span>Επόμενη πληρωμή</span>${dateInput("hrNext", f.next)}</label>
       </div>
       <div class="actions">
         ${edit ? `<button class="btn danger ${sure ? 'sure' : ''}" id="hrDel">${sure ? 'Σίγουρα;' : 'Διαγραφή'}</button>` : ''}
@@ -2394,7 +2394,7 @@ function openTplForm(kind, item) {
         <div class="row2">
           <label class="field" style="margin:0"><span>Κάθε πότε</span>
             <select id="tpFreq">${freqs.map(([n, u, l]) => `<option value="${n}|${u}" ${n === f.every && u === f.unit ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-          <label class="field" style="margin:0"><span>Επόμενη χρέωση</span><input id="tpNext" type="date" value="${esc(f.next)}"></label>
+          <label class="field" style="margin:0"><span>Επόμενη χρέωση</span>${dateInput("tpNext", f.next)}</label>
         </div>` : ''}
       ${data.acc.length ? `<div class="field"><span>${f.type === IN ? 'Μπαίνουν σε' : 'Πληρώνεται από'}</span>${accChips('tpacc', f.acc)}</div>` : ''}
       <div class="field"><span>Κατηγορία</span>
@@ -2507,6 +2507,18 @@ function confirmBox(title, text, okLabel = 'Διαγραφή') {
 
 const ICON_BACK = '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>';
 
+/**
+ * Πεδίο ημερομηνίας που δείχνει ηη/μμ/εε: το ημερολόγιο είναι του κινητού (για την επιλογή),
+ * αλλά το κείμενό του κρύβεται και από πάνω γράφεται η ημερομηνία όπως στην Ελλάδα.
+ */
+function dateInput(id, value) {
+  return `<span class="date-wrap"><input id="${id}" type="date" value="${esc(value)}"><span class="date-show" aria-hidden="true">${value ? fmtDate(value) : 'ηη/μμ/εε'}</span></span>`;
+}
+// Όταν αλλάζει οποιοδήποτε τέτοιο πεδίο, ενημερώνεται το κείμενο από πάνω.
+document.addEventListener('input', e => {
+  const w = e.target.closest?.('.date-wrap');
+  if (w) w.querySelector('.date-show').textContent = e.target.value ? fmtDate(e.target.value) : 'ηη/μμ/εε';
+});
 function dateField(id, value) {
   const t = isoDate(new Date());
   const y = new Date(); y.setDate(y.getDate() - 1);
@@ -2514,7 +2526,7 @@ function dateField(id, value) {
   return `
     <div class="field"><span>Ημερομηνία</span>
       <div class="date-row">
-        <input id="${id}" type="date" value="${esc(value)}">
+        ${dateInput(id, value)}
         <button type="button" class="chip ${value === t ? 'on' : ''}" data-date="${t}">Σήμερα</button>
         <button type="button" class="chip ${value === yd ? 'on' : ''}" data-date="${yd}">Χθες</button>
       </div>
@@ -2522,7 +2534,10 @@ function dateField(id, value) {
 }
 function wireDateField(body, id) {
   const inp = $('#' + id, body);
-  const sync = () => $$('[data-date]', body).forEach(c => c.classList.toggle('on', c.dataset.date === inp.value));
+  const sync = () => {
+    $$('[data-date]', body).forEach(c => c.classList.toggle('on', c.dataset.date === inp.value));
+    inp.closest('.date-wrap').querySelector('.date-show').textContent = inp.value ? fmtDate(inp.value) : 'ηη/μμ/εε';
+  };
   $$('[data-date]', body).forEach(c => c.onclick = () => { inp.value = c.dataset.date; sync(); });
   inp.oninput = sync;
 }

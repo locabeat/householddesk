@@ -771,3 +771,14 @@ body.logged-out #pending { display: none; }
 .choice:hover { border-color: var(--petrol-3); }
 .quick { background: var(--card-solid); }
 .seg.big button.on.out, .seg.big button.on.in { box-shadow: none; }
+
+/* ημερομηνία ηη/μμ/εε πάνω από το ημερολόγιο του κινητού */
+.date-wrap { position: relative; display: block; flex: 1; min-width: 0; }
+.date-wrap input[type=date] { color: transparent; min-height: 44px; }
+.date-wrap input[type=date]::-webkit-datetime-edit { color: transparent; }
+.date-wrap input[type=date]::-webkit-date-and-time-value { color: transparent; text-align: left; }
+.date-show {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  pointer-events: none; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text);
+}
+.date-row .date-wrap { flex: 1; }
