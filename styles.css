@@ -510,7 +510,7 @@ img.zoom.loaded { opacity: 1; }
 .acc-tile:hover { border-color: var(--petrol-3); background: var(--chip-hover); }
 .acc-tile:active { transform: scale(.97); }
 .acc-ico { grid-row: 1 / 3; font-size: 22px; width: 38px; height: 38px; border-radius: 12px; background: var(--card-solid); display: grid; place-items: center; }
-.acc-name { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acc-name { font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
 .acc-tile b { font-size: 16px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
 .acc-empty { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .acc-empty b { display: block; }
@@ -600,3 +600,174 @@ img.zoom.loaded { opacity: 1; }
 .pending[hidden] { display: none; }
 @keyframes pulse { 50% { opacity: .7; } }
 body.logged-out #pending { display: none; }
+
+/* κινητό: τα ποσά στις κάρτες να χωράνε και όταν είναι χιλιάδες (π.χ. 12.345,67 €) */
+@media (max-width: 480px) {
+  .kpis { gap: 7px; }
+  .kpi { padding: 10px 9px; }
+  .kpi > span { font-size: 10px; letter-spacing: .03em; }
+  .kpi b { font-size: clamp(12px, 3.7vw, 17px); letter-spacing: -.03em; }
+  .acc-grid { gap: 7px; }
+  .acc-tile { padding: 10px 9px; column-gap: 8px; }
+  .acc-ico { width: 34px; height: 34px; font-size: 19px; }
+  .acc-tile b { font-size: 15px; letter-spacing: -.03em; }
+}
+
+/* μικρά κινητά (π.χ. Android 360px και κάτω) */
+.m-short { display: none; }
+@media (max-width: 400px) {
+  .topbar { padding-left: 14px; padding-right: 12px; gap: 6px; }
+  .topbar h1 { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .topbar .icon-btn { width: 36px; height: 36px; }
+  .m-long { display: none; }
+  .m-short { display: inline; }
+  table.months { font-size: 13px; }
+  table.months td, table.months th { padding-left: 4px; padding-right: 4px; }
+}
+@media (max-width: 340px) {
+  .choice.slim { grid-column: 1 / -1; }
+  .topbar h1 { font-size: 16px; }
+  .topbar .icon-btn { width: 32px; height: 32px; }
+  table.months { font-size: 12px; }
+}
+
+/* «Πού πήγαν τα λεφτά» — κατηγορικά χρώματα (ελεγμένα για αχρωματοψία, φωτεινό & σκούρο) */
+:root {
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7;
+  --s-other: #9aa7aa;
+}
+:root[data-theme="dark"] {
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9;
+  --s-other: #56676b;
+}
+.spend { margin-top: 16px; }
+.spend-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.spend-head h3 { margin: 0; }
+.seg.small button { padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+.spend-bar { display: flex; gap: 2px; height: 18px; border-radius: 6px; overflow: hidden; background: var(--card-solid); }
+.spend-bar i { min-width: 3px; cursor: pointer; transition: opacity .15s; }
+.spend-bar:hover i { opacity: .75; }
+.spend-bar i:hover { opacity: 1; }
+.spend-total { margin: 8px 2px 10px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; flex: none; }
+.pct { color: var(--muted); font-weight: 600; font-size: 11px; margin-left: 6px; }
+.income-block { margin-top: 18px; }
+.clip { font-size: 12px; }
+.receipt-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.receipt-thumb { width: 54px; height: 54px; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.88); display: grid; place-items: center; padding: 16px; }
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; }
+.lightbox .icon-btn { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; background: rgba(255,255,255,.15); color: #fff; }
+
+/* =====================================================================
+   v2 — φινίρισμα: επίπεδες επιφάνειες, ιεραρχία, λιγότερο κόκκινο
+   ===================================================================== */
+:root { --gloss: none; --house: #b8742f; --warn: #c97a14; }
+:root[data-theme="dark"] { --house: #e0a15a; --warn: #f0a640; }
+
+/* κουμπιά & επιφάνειες χωρίς γυαλάδα */
+.btn.primary { box-shadow: none; }
+.btn.primary:hover { filter: brightness(1.06); }
+.tabbar .fab { box-shadow: 0 6px 18px rgba(11, 85, 99, .35); }
+.card { box-shadow: none; }
+.list { box-shadow: none; }
+
+/* σήματα: μικρά, όχι κόκκινα συναγερμοί */
+.badge { min-width: 16px; height: 16px; font-size: 10px; background: var(--petrol-2); box-shadow: 0 0 0 2px var(--bg); }
+#dueBadge, #houseBadge { background: var(--warn); }
+.icon-btn.light { background: transparent; color: var(--muted); }
+.icon-btn.light:hover, .cart.active { color: var(--text); background: var(--chip); }
+
+/* ---------- Αρχική: κεντρική κάρτα ---------- */
+.hero-card {
+  border-radius: 24px; padding: 18px 18px 14px; margin-bottom: 14px; color: #fff;
+  background: linear-gradient(150deg, #0b5563 0%, #0f7f89 70%, #1a9690 100%);
+}
+.hero-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; opacity: .85; }
+.hero-hello { opacity: .8; font-weight: 500; }
+.hero-amt { display: block; font-size: 36px; font-weight: 800; letter-spacing: -.03em; margin: 4px 0 8px; line-height: 1.1; }
+.hero-month { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; font-weight: 600; opacity: .95; }
+.hero-month .hero-m { opacity: .75; font-weight: 500; }
+.hero-month i { font-style: normal; margin-right: 3px; opacity: .8; }
+.hero-accs { display: flex; gap: 8px; overflow-x: auto; margin: 14px -18px 0; padding: 0 18px 2px; scrollbar-width: none; }
+.hero-accs::-webkit-scrollbar { display: none; }
+.hero-acc {
+  flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 9px 12px; border-radius: 14px; border: 0; color: #fff; text-align: left;
+  background: rgba(255, 255, 255, .13);
+}
+.hero-acc:hover { background: rgba(255, 255, 255, .2); }
+.hero-acc span { font-size: 12px; opacity: .85; white-space: nowrap; }
+.hero-acc b { font-size: 15px; font-weight: 700; white-space: nowrap; }
+.hero-add { margin-top: 14px; width: 100%; padding: 11px; border-radius: 14px; border: 1px dashed rgba(255,255,255,.45); background: none; color: #fff; font-size: 13px; text-align: left; }
+
+/* ---------- «Να θυμάσαι» ---------- */
+.attention h2 { margin-bottom: 4px; }
+.attention .rec-row { width: 100%; background: none; border: 0; text-align: left; padding: 10px 0; border-radius: 0; }
+.attention .rec-row + .rec-row { border-top: 1px solid var(--line); }
+.attention .rec-row:hover { background: none; }
+.rec-row:not(.due) { opacity: 1; }
+.rec-row:not(.due) .si-main b { font-weight: 600; }
+.rec-row .amt { color: var(--text); }
+.rec-row.due .rec-date { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.rec-row.due .rec-date b { color: var(--warn); }
+.rec-row.due small { color: var(--warn); }
+.rec-ok { box-shadow: none; }
+.house-ico { color: var(--house); background: color-mix(in srgb, var(--house) 15%, transparent); }
+.house-ico svg { width: 20px; height: 20px; }
+.chev { color: var(--muted); display: grid; }
+.chev svg { width: 18px; height: 18px; }
+
+/* ---------- στατιστικά χωρίς κουτάκια ---------- */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 4px; }
+.stats > div { min-width: 0; }
+.stats span { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+.stats b { display: block; font-size: 18px; font-weight: 800; letter-spacing: -.02em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stats .delta { display: block; margin-top: 2px; }
+@media (max-width: 400px) { .stats b { font-size: clamp(13px, 4vw, 18px); } }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.card-head h2 { margin: 0; }
+.table-toggle { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.table-toggle summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; padding: 4px 0; }
+.month-nav .icon-btn { background: transparent; }
+
+/* ---------- κινήσεις: κυκλάκι κατηγορίας ---------- */
+.cat-ico {
+  width: 36px; height: 36px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  font-size: 14px; font-weight: 700; color: var(--c, var(--muted));
+  background: color-mix(in srgb, var(--c, var(--muted)) 16%, transparent);
+}
+.cat-ico svg { width: 17px; height: 17px; }
+.cat-ico.sym { font-size: 16px; }
+.item .amt { color: var(--text); }
+.item .amt.pos { color: var(--pos); }
+.day-h { text-transform: none; }
+
+/* ---------- φίλτρα ---------- */
+.search-row { display: flex; gap: 8px; }
+.search-row input { flex: 1; min-width: 0; }
+.filter-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.filter-btn svg { width: 16px; height: 16px; }
+.filter-btn.on { color: var(--petrol-2); border-color: var(--petrol-3); }
+.filter-btn i { font-style: normal; font-size: 11px; background: var(--petrol-2); color: #fff; border-radius: 99px; padding: 1px 6px; }
+
+/* ---------- «+»: ήρεμες επιλογές ---------- */
+.choice {
+  background: var(--card-solid) !important; color: var(--text); border: 1px solid var(--line);
+  box-shadow: none !important; height: 128px; font-size: 16px;
+}
+.choice::before { display: none; }
+.choice b {
+  width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 28px; font-weight: 500;
+}
+.choice.out b { background: color-mix(in srgb, var(--neg) 15%, transparent); color: var(--neg); }
+.choice.in b { background: color-mix(in srgb, var(--pos) 15%, transparent); color: var(--pos); }
+.choice.tr b { background: color-mix(in srgb, var(--tr) 15%, transparent); color: var(--tr); }
+.choice.house b { background: color-mix(in srgb, var(--house) 15%, transparent); color: var(--house); font-size: 22px; }
+.choice.slim, .choice.wide { height: 76px; }
+.choice.slim b, .choice.wide b { width: 40px; height: 40px; font-size: 20px; }
+.choice small { color: var(--muted); opacity: 1; }
+.choice:hover { border-color: var(--petrol-3); }
+.quick { background: var(--card-solid); }
+.seg.big button.on.out, .seg.big button.on.in { box-shadow: none; }

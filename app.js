@@ -56,7 +56,7 @@ function normalize(d) {
   const s = v => String(v ?? '').trim();
   return {
     profile: s(d.profile),
-    tx: (d.tx || []).map(r => ({ id: s(r.id), date: s(r.date), type: s(r.type), amount: num(r.amount), cat: s(r.cat), sub: s(r.sub), note: s(r.note), acc: s(r.acc), to: s(r.to) })),
+    tx: (d.tx || []).map(r => ({ id: s(r.id), date: s(r.date), type: s(r.type), amount: num(r.amount), cat: s(r.cat), sub: s(r.sub), note: s(r.note), acc: s(r.acc), to: s(r.to), receipt: s(r.receipt) })),
     acc: (d.acc || []).map(r => ({ id: s(r.id), name: s(r.name), icon: s(r.icon), start: num(r.start) })),
     rec: (d.rec || []).map(r => ({
       id: s(r.id), name: s(r.name), type: s(r.type) || OUT, amount: num(r.amount), cat: s(r.cat), sub: s(r.sub), acc: s(r.acc),
@@ -65,7 +65,7 @@ function normalize(d) {
     members: (d.members || []).map(s).filter(Boolean),
     house: (d.house || []).map(r => ({
       id: s(r.id), date: s(r.date), kind: s(r.kind) || H_EXP, cat: s(r.cat), amount: num(r.amount), note: s(r.note),
-      paidBy: s(r.paidBy), owedBy: s(r.owedBy), share: s(r.share) === '' ? 50 : num(r.share), payAcc: s(r.payAcc), recvAcc: s(r.recvAcc), addedBy: s(r.addedBy),
+      paidBy: s(r.paidBy), owedBy: s(r.owedBy), share: s(r.share) === '' ? 50 : num(r.share), payAcc: s(r.payAcc), recvAcc: s(r.recvAcc), receipt: s(r.receipt), addedBy: s(r.addedBy),
     })),
     houseCat: (d.houseCat || []).map(r => ({ id: s(r.id), name: s(r.name), icon: s(r.icon) })),
     houseRec: (d.houseRec || []).map(r => ({
@@ -193,7 +193,7 @@ function houseVirtual() {
       const mine = h.paidBy === me;
       out.push({
         id: 'h:' + h.id, houseId: h.id, house: true, date: h.date, type: OUT, amount: round2(houseShare(h, me)), cat: HOUSE_CAT, sub: h.cat,
-        note: [mine ? '' : `πλήρωσε ${h.paidBy}`, h.note].filter(Boolean).join(' · '), acc: mine ? h.payAcc : '', to: '',
+        note: [mine ? '' : `πλήρωσε ${h.paidBy}`, h.note].filter(Boolean).join(' · '), acc: mine ? h.payAcc : '', to: '', receipt: h.receipt,
         cash: mine ? -h.amount : 0, cashAcc: mine ? h.payAcc : '',
       });
     } else if (h.paidBy === me || h.owedBy === me) {
@@ -519,7 +519,7 @@ function mockApi(action, p) {
   let res = {};
   const same = (r, sub) => r.type === p.type && r.cat === p.cat && (!sub || r.sub === p.sub);
   const low = s => String(s || '').trim().toLowerCase();
-  const inUse = id => db.prod.some(r => r.photo === id) || db.shop.some(r => r.photo === id);
+  const inUse = id => db.prod.some(r => r.photo === id) || db.shop.some(r => r.photo === id) || db.tx.some(r => r.receipt === id) || (db.house || []).some(r => r.receipt === id);
   const trash = id => { if (id && !inUse(id)) delete db.photos[id]; };
   const remember = (name, photo, list) => {
     const pr = db.prod.find(r => low(r.name) === low(name));
@@ -573,6 +573,8 @@ function mockApi(action, p) {
   } else if (action === 'uploadPhoto') {
     res = { id: 'demo-' + uid() };
     db.photos[res.id] = p.data;
+  } else if (action === 'discardPhoto') {
+    trash(p.id);
   } else if (action === 'photo') {
     res = { data: db.photos[p.id] || '' };
   } else if (action === 'renameHouseCat') {
@@ -664,7 +666,6 @@ function renderHome(v) {
   }
   const incEntries = [...incBy].sort((a, b) => b[1] - a[1]);
   const outEntries = [...outBy].sort((a, b) => b[1].total - a[1].total);
-  const outMax = Math.max(1, ...outEntries.map(e => e[1].total));
   const mIn = sum(incEntries.map(e => e[1])), mOut = sum(outEntries.map(e => e[1].total));
   const win = n => `<span class="${n < 0 ? 'neg' : 'pos'}">${eur(n)}</span>`;
 
@@ -694,37 +695,40 @@ function renderHome(v) {
     const d = round2((outBy.get(c)?.total || 0) - (pOutBy.get(c) || 0));
     return Math.abs(d) < 1 ? '' : `<small class="delta ${d > 0 ? 'bad' : 'good'}">${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</small>`;
   };
+  // «Πού πήγαν τα λεφτά»: οι 7 μεγαλύτερες κατηγορίες της χρονιάς έχουν σταθερό χρώμα, οι υπόλοιπες γκρι «Άλλα».
+  const byCat = list => {
+    const m = new Map();
+    for (const t of list) {
+      if (t.type !== OUT) continue;
+      const c = t.cat || NO_CAT;
+      if (!m.has(c)) m.set(c, { total: 0, subs: new Map() });
+      const o = m.get(c);
+      o.total += t.amount;
+      o.subs.set(t.sub || '—', (o.subs.get(t.sub || '—') || 0) + t.amount);
+    }
+    return m;
+  };
+  const yearBy = byCat(inYear);
+  const topCats = [...yearBy].sort((a, b) => b[1].total - a[1].total).slice(0, 7).map(e => e[0]);
+  const colorOf = c => { const i = topCats.indexOf(c); return i >= 0 ? `var(--s${i + 1})` : 'var(--s-other)'; };
+  const spScope = ui.spendScope === 'year' ? 'year' : 'month';
+  const spEntries = [...(spScope === 'year' ? yearBy : outBy)].sort((a, b) => b[1].total - a[1].total);
+  const spTotal = sum(spEntries.map(e => e[1].total));
+  const spMax = Math.max(1, ...spEntries.map(e => e[1].total));
+  const pctOf = a => spTotal ? Math.round(a / spTotal * 100) : 0;
+  const others = sum(spEntries.filter(([c]) => !topCats.includes(c)).map(e => e[1].total));
+  const spSegs = [
+    ...spEntries.filter(([c]) => topCats.includes(c)).map(([c, o]) => [c, o.total, colorOf(c)]),
+    ...(others > 0 ? [['Άλλα', others, 'var(--s-other)']] : []),
+  ];
+
   const changes = hasPrev ? [...new Set([...outBy.keys(), ...pOutBy.keys()])]
     .map(c => [c, round2((outBy.get(c)?.total || 0) - (pOutBy.get(c) || 0))])
     .filter(([, d]) => Math.abs(d) >= 1).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4) : [];
 
   v.innerHTML = `
-    ${data.profile ? `<p class="hello">Γεια σου, <b>${esc(data.profile)}</b> 👋</p>` : ''}
-    ${recCard()}
-    ${houseMini()}
-    ${accCard()}
-    <div class="head-row">
-      <h2>Σύνοψη έτους</h2>
-      <select id="yearSel" class="year-select">${years.map(y => `<option ${y === ui.year ? 'selected' : ''}>${y}</option>`).join('')}</select>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><span>Έσοδα</span><b class="pos">${eur(totIn)}</b></div>
-      <div class="kpi"><span>Έξοδα</span><b class="neg">${eur(totOut)}</b></div>
-      <div class="kpi hero"><span>Υπόλοιπο</span><b>${win(totIn - totOut)}</b></div>
-    </div>
-
-    <section class="card">
-      <h2>Ανά μήνα</h2>
-      <div class="chart-wrap"><canvas id="chart" aria-label="Έσοδα και έξοδα ανά μήνα"></canvas></div>
-      <table class="months">
-        <thead><tr><th>Μήνας</th><th>Έσοδα</th><th>Έξοδα</th><th>Υπόλοιπο</th></tr></thead>
-        <tbody>${months.map((m, i) => `
-          <tr data-m="${i}" class="${i === ui.month ? 'sel' : ''}">
-            <td>${MONTHS[i]}</td><td>${eur(m.inc)}</td><td class="neg">${eur(m.out)}</td><td>${win(m.inc - m.out)}</td>
-          </tr>`).join('')}</tbody>
-        <tfoot><tr><td>Σύνολο</td><td>${eur(totIn)}</td><td class="neg">${eur(totOut)}</td><td>${win(totIn - totOut)}</td></tr></tfoot>
-      </table>
-    </section>
+    ${heroCard()}
+    ${attentionCard()}
 
     <section class="card">
       <div class="month-nav">
@@ -732,10 +736,10 @@ function renderHome(v) {
         <div class="label">${MONTHS[ui.month]} ${ui.year}</div>
         <button class="icon-btn" id="mNext" aria-label="Επόμενος μήνας"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
       </div>
-      <div class="kpis" style="margin:10px 0 0">
-        <div class="kpi"><span>Έσοδα</span><b class="pos">${eur(mIn)}</b>${delta(cIn, pIn, true)}</div>
-        <div class="kpi"><span>Έξοδα</span><b class="neg">${eur(mOut)}</b>${delta(cOut, pOut, false)}</div>
-        <div class="kpi hero"><span>Υπόλοιπο</span><b>${win(mIn - mOut)}</b></div>
+      <div class="stats">
+        <div><span>Έσοδα</span><b class="pos">${eur(mIn)}</b>${delta(cIn, pIn, true)}</div>
+        <div><span>Έξοδα</span><b>${eur(mOut)}</b>${delta(cOut, pOut, false)}</div>
+        <div><span>Υπόλοιπο</span><b class="${mIn - mOut < 0 ? 'neg' : ''}">${eur(mIn - mOut)}</b></div>
       </div>
       ${hasPrev ? `
         <div class="cmp">
@@ -743,26 +747,65 @@ function renderHome(v) {
           ${changes.length ? `<div class="cmp-chips">${changes.map(([c, d]) =>
             `<span class="cmp-chip ${d > 0 ? 'bad' : 'good'}">${esc(c)} <b>${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</b></span>`).join('')}</div>` : ''}
         </div>` : ''}
-      <div class="two-col">
-        <div>
-          <h3>Έσοδα από</h3>
-          ${incEntries.length ? bars(incEntries, 'in') : '<p class="muted small">Κανένα έσοδο.</p>'}
+      <div class="spend">
+        <div class="spend-head">
+          <h3>Πού πήγαν τα λεφτά</h3>
+          <div class="seg small" id="spendScope">
+            ${[['month', MONTHS_SHORT[ui.month]], ['year', `Όλο το ${ui.year}`]].map(([k, l]) => `<button data-scope="${k}" class="${spScope === k ? 'on' : ''}">${esc(l)}</button>`).join('')}
+          </div>
         </div>
-        <div>
-          <h3>Έξοδα ανά κατηγορία</h3>
-          ${outEntries.length ? outEntries.map(([c, o]) => `
-            <details class="cat-break">
-              <summary>
-                <div class="bar-row">
-                  <div class="bar-label"><span>${esc(c)}</span><b>${catDelta(c)}${eur(o.total)}</b></div>
-                  <div class="bar"><i class="out" style="width:${(o.total / outMax * 100).toFixed(1)}%"></i></div>
-                </div>
-              </summary>
-              <div class="subs">${[...o.subs].sort((a, b) => b[1] - a[1]).map(([s, a]) => `<div><span>${esc(s)}</span><span>${eur(a)}</span></div>`).join('')}</div>
-            </details>`).join('') : '<p class="muted small">Κανένα έξοδο.</p>'}
-        </div>
+        ${spTotal ? `
+          <div class="spend-bar" role="img" aria-label="Έξοδα ανά κατηγορία: ${esc(spSegs.map(([c, a]) => `${c} ${pctOf(a)}%`).join(', '))}">
+            ${spSegs.map(([c, a, col]) => `<i data-seg="${esc(c)}" style="flex:${a.toFixed(2)} 1 0;background:${col}" title="${esc(c)}: ${eur(a)} (${pctOf(a)}%)"></i>`).join('')}
+          </div>
+          <p class="small muted spend-total">Σύνολο εξόδων: <b>${eur(spTotal)}</b></p>` : ''}
+        ${spEntries.length ? spEntries.map(([c, o]) => `
+          <details class="cat-break" data-cat-row="${esc(c)}">
+            <summary>
+              <div class="bar-row">
+                <div class="bar-label"><span><i class="sw" style="background:${colorOf(c)}"></i>${esc(c)}</span><b>${spScope === 'month' ? catDelta(c) : ''}${eur(o.total)}<small class="pct">${pctOf(o.total)}%</small></b></div>
+                <div class="bar"><i style="width:${(o.total / spMax * 100).toFixed(1)}%;background:${colorOf(c)}"></i></div>
+              </div>
+            </summary>
+            <div class="subs">${[...o.subs].sort((a, b) => b[1] - a[1]).map(([s, a]) => `<div><span>${esc(s)}</span><span>${eur(a)}</span></div>`).join('')}</div>
+          </details>`).join('') : `<p class="muted small">Κανένα έξοδο ${spScope === 'month' ? 'αυτόν τον μήνα' : 'φέτος'}.</p>`}
       </div>
+      <div class="income-block">
+        <h3>Έσοδα από</h3>
+        ${incEntries.length ? bars(incEntries, 'in') : '<p class="muted small">Κανένα έσοδο.</p>'}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Η χρονιά</h2>
+        <select id="yearSel" class="year-select">${years.map(y => `<option ${y === ui.year ? 'selected' : ''}>${y}</option>`).join('')}</select>
+      </div>
+      <div class="stats">
+        <div><span>Έσοδα</span><b class="pos">${eur(totIn)}</b></div>
+        <div><span>Έξοδα</span><b>${eur(totOut)}</b></div>
+        <div><span>Υπόλοιπο</span><b class="${totIn - totOut < 0 ? 'neg' : ''}">${eur(totIn - totOut)}</b></div>
+      </div>
+      <div class="chart-wrap"><canvas id="chart" aria-label="Έσοδα και έξοδα ανά μήνα"></canvas></div>
+      <details class="table-toggle">
+        <summary>Πίνακας ανά μήνα</summary>
+        <table class="months">
+          <thead><tr><th>Μήνας</th><th>Έσοδα</th><th>Έξοδα</th><th>Υπόλοιπο</th></tr></thead>
+          <tbody>${months.map((m, i) => `
+            <tr data-m="${i}" class="${i === ui.month ? 'sel' : ''}">
+              <td><span class="m-long">${MONTHS[i]}</span><span class="m-short">${MONTHS_SHORT[i]}</span></td><td>${eur(m.inc)}</td><td>${eur(m.out)}</td><td>${win(m.inc - m.out)}</td>
+            </tr>`).join('')}</tbody>
+          <tfoot><tr><td>Σύνολο</td><td>${eur(totIn)}</td><td>${eur(totOut)}</td><td>${win(totIn - totOut)}</td></tr></tfoot>
+        </table>
+      </details>
     </section>`;
+
+  $$('#spendScope button', v).forEach(b => b.onclick = () => { ui.spendScope = b.dataset.scope; render(); });
+  // Πάτημα σε κομμάτι της μπάρας: ανοίγει η κατηγορία από κάτω.
+  $$('[data-seg]', v).forEach(s => s.onclick = () => {
+    const row = $$('[data-cat-row]', v).find(r => r.dataset.catRow === s.dataset.seg);
+    if (row) { row.open = true; row.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  });
 
   $$('[data-acc-open]', v).forEach(b => b.onclick = () => {
     ui.txAcc = b.dataset.accOpen; ui.txMonth = 'all'; ui.txType = 'all'; ui.tab = 'tx';
@@ -786,28 +829,36 @@ function renderHome(v) {
 
 const dueRecs = () => data.rec.filter(r => r.next && daysUntil(r.next) <= 0).sort((a, b) => a.next.localeCompare(b.next));
 
-/** Πάγια που χρεώνονται σήμερα ή έχουν περάσει, και όσα έρχονται την επόμενη εβδομάδα. */
-function recCard() {
+/** «Να θυμάσαι»: πάγια για χρέωση (και όσα έρχονται την εβδομάδα) και ποιος χρωστάει στο Σπίτι. */
+function attentionCard() {
   const rows = data.rec.filter(r => r.next && daysUntil(r.next) <= 7).sort((a, b) => a.next.localeCompare(b.next));
-  if (!rows.length) return '';
-  const due = rows.filter(r => daysUntil(r.next) <= 0).length;
+  const house = data.house.length && data.members.length > 1;
+  if (!rows.length && !house) return '';
   const when = r => {
     const n = daysUntil(r.next);
     return n < -1 ? `από ${fmtDate(r.next)}` : n === -1 ? 'από χθες' : n === 0 ? 'σήμερα' : n === 1 ? 'αύριο' : `σε ${n} μέρες`;
   };
+  const hb = house ? houseBalance() : 0, other = otherOf(data.profile);
   return `
-    <section class="card recs">
-      <div class="accs-head"><h2>Πάγια</h2>${due ? `<span class="due-badge">${due} για χρέωση</span>` : '<span class="muted small">την επόμενη εβδομάδα</span>'}</div>
-      <div class="list flat">${rows.map(r => {
+    <section class="card attention">
+      <h2>Να θυμάσαι</h2>
+      ${rows.map(r => {
         const isDue = daysUntil(r.next) <= 0;
         return `
         <div class="rec-row ${isDue ? 'due' : ''}" data-rec="${esc(r.id)}">
           ${recDate(r.next)}
-          <span class="si-main"><b>${esc(r.name)}</b><small>${when(r)}${r.acc ? ` · ${esc(accIcon(r.acc))} ${esc(r.acc)}` : ''}</small></span>
-          <span class="amt ${r.type === IN ? 'pos' : 'neg'}">${eur(r.amount)}</span>
+          <span class="si-main"><b>${esc(r.name)}</b><small>${when(r)}</small></span>
+          <span class="amt">${r.type === IN ? '+' : ''}${eur(r.amount)}</span>
           <button class="rec-ok ${isDue ? '' : 'soft'}" data-recpay="${esc(r.id)}" aria-label="Χρεώθηκε">${ICON_CHECK}</button>
         </div>`;
-      }).join('')}</div>
+      }).join('')}
+      ${house ? `
+        <button class="rec-row house-row" id="homeHouse">
+          <span class="rec-date house-ico">${ICON_HOME}</span>
+          <span class="si-main"><b>Σπίτι</b><small>${hb > 0 ? `${esc(other)} σου χρωστάει` : hb < 0 ? `χρωστάς σε ${esc(other)}` : 'είστε πάτσι ✓'}</small></span>
+          ${hb ? `<span class="amt ${hb > 0 ? 'pos' : 'neg'}">${eur(Math.abs(hb))}</span>` : ''}
+          <span class="chev">${ICON_CHEV}</span>
+        </button>` : ''}
     </section>`;
 }
 
@@ -848,25 +899,34 @@ function openRecPay(r) {
   $('#rpEdit', body).onclick = () => openTplForm('rec', r);
 }
 
-function accCard() {
-  if (!data.acc.length) return `
-    <section class="card acc-empty">
-      <div><b>Ταμεία</b><small class="muted">Πρόσθεσε πού έχεις τα λεφτά σου (Μετρητά, Revolut, Πειραιώς…) για να βλέπεις το υπόλοιπο του καθενός.</small></div>
-      <button class="btn primary small" id="homeAddAcc">+ Ταμείο</button>
-    </section>`;
+/** Η κεντρική κάρτα της Αρχικής: πόσα λεφτά έχεις (σύνολο ταμείων) και ο τρέχων μήνας με μια ματιά. */
+function heroCard() {
+  const now = new Date();
+  const ym = isoDate(now).slice(0, 7);
+  const cur = allTx().filter(t => t.date.startsWith(ym));
+  const inc = sum(cur.filter(t => t.type === IN).map(t => t.amount));
+  const out = sum(cur.filter(t => t.type === OUT).map(t => t.amount));
   const bal = accBalances();
-  const total = sum([...bal.values()]);
+  const hasAcc = data.acc.length > 0;
+  const total = hasAcc ? sum([...bal.values()]) : inc - out;
   return `
-    <section class="card accs">
-      <div class="accs-head"><h2>Ταμεία</h2><b class="${total < 0 ? 'neg' : ''}">${eur(total)}</b></div>
-      <div class="acc-grid">${data.acc.map(a => {
-        const n = bal.get(a.name) || 0;
-        return `<button class="acc-tile" data-acc-open="${esc(a.name)}">
-          <span class="acc-ico">${esc(a.icon || '💳')}</span>
-          <span class="acc-name">${esc(a.name)}</span>
-          <b class="${n < 0 ? 'neg' : ''}">${eur(n)}</b>
-        </button>`;
-      }).join('')}</div>
+    <section class="hero-card">
+      <div class="hero-top">
+        <span>${hasAcc ? 'Διαθέσιμο' : `Υπόλοιπο ${MONTHS_ACC[now.getMonth()].replace('τον ', '')}`}</span>
+        ${data.profile ? `<span class="hero-hello">Γεια σου, ${esc(data.profile)}</span>` : ''}
+      </div>
+      <b class="hero-amt">${eur(total)}</b>
+      <div class="hero-month">
+        <span class="hero-m">${MONTHS[now.getMonth()]}</span>
+        <span><i class="up">↑</i>${eur(inc)}</span>
+        <span><i class="down">↓</i>${eur(out)}</span>
+      </div>
+      ${hasAcc ? `
+        <div class="hero-accs">${data.acc.map(a => {
+          const n = bal.get(a.name) || 0;
+          return `<button class="hero-acc" data-acc-open="${esc(a.name)}"><span>${esc(a.icon || '💳')} ${esc(a.name)}</span><b>${eur(n)}</b></button>`;
+        }).join('')}</div>` : `
+        <button class="hero-add" id="homeAddAcc">+ Πρόσθεσε τα ταμεία σου (Μετρητά, τράπεζες…) για να βλέπεις πόσα έχεις</button>`}
     </section>`;
 }
 
@@ -922,18 +982,24 @@ function renderTx(v) {
       <div class="seg" id="txType">
         ${[['all', 'Όλα'], [IN, 'Έσοδα'], [OUT, 'Έξοδα'], [TR, 'Μεταφορές']].map(([k, l]) => `<button data-v="${k}" class="${ui.txType === k ? 'on' : ''}">${l}</button>`).join('')}
       </div>
-      ${data.acc.length ? `
-      <select id="txAcc">
-        <option value="">Όλα τα ταμεία</option>
-        ${data.acc.map(a => `<option value="${esc(a.name)}" ${a.name === ui.txAcc ? 'selected' : ''}>${esc(a.icon || '💳')} ${esc(a.name)}</option>`).join('')}
-      </select>` : ''}
+      <div class="search-row">
+        <input id="txQ" type="search" placeholder="Αναζήτηση… (π.χ. καφές >3)" value="${esc(ui.txQuery)}">
+        <button class="btn small filter-btn ${ui.txAcc || ui.txCat ? 'on' : ''}" id="txMore" aria-expanded="${ui.txFilters ? 'true' : 'false'}">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Φίλτρα${ui.txAcc || ui.txCat ? ` <i>${(ui.txAcc ? 1 : 0) + (ui.txCat ? 1 : 0)}</i>` : ''}
+        </button>
+      </div>
+      ${ui.txFilters || ui.txAcc || ui.txCat ? `
       <div class="row2">
+        ${data.acc.length ? `
+        <select id="txAcc">
+          <option value="">Όλα τα ταμεία</option>
+          ${data.acc.map(a => `<option value="${esc(a.name)}" ${a.name === ui.txAcc ? 'selected' : ''}>${esc(a.icon || '💳')} ${esc(a.name)}</option>`).join('')}
+        </select>` : ''}
         <select id="txCat">
           <option value="">Όλες οι κατηγορίες</option>
           ${cats.map(c => `<option ${c === ui.txCat ? 'selected' : ''}>${esc(c)}</option>`).join('')}
         </select>
-        <input id="txQ" type="search" placeholder="Αναζήτηση… (π.χ. καφές >3)" value="${esc(ui.txQuery)}">
-      </div>
+      </div>` : ''}
     </section>
     <div id="txSummary" class="summary"></div>
     <div id="txList"></div>`;
@@ -951,10 +1017,35 @@ function renderTx(v) {
     $$('#txType button', v).forEach(x => x.classList.toggle('on', x === b));
     renderTxList();
   });
-  $('#txCat').onchange = e => { ui.txCat = e.target.value; renderTxList(); };
-  if ($('#txAcc')) $('#txAcc').onchange = e => { ui.txAcc = e.target.value; renderTxList(); };
+  $('#txMore').onclick = () => { ui.txFilters = !(ui.txFilters || ui.txAcc || ui.txCat); if (!ui.txFilters) { ui.txAcc = ''; ui.txCat = ''; } render(); };
+  if ($('#txCat')) $('#txCat').onchange = e => { ui.txCat = e.target.value; render(); };
+  if ($('#txAcc')) $('#txAcc').onchange = e => { ui.txAcc = e.target.value; render(); };
   $('#txQ').oninput = e => { ui.txQuery = e.target.value; renderTxList(); };
   renderTxList();
+}
+
+/**
+ * Χρώμα κατηγορίας εξόδων: οι 7 μεγαλύτερες της χρονιάς έχουν σταθερό χρώμα (τα ίδια με το
+ * «Πού πήγαν τα λεφτά»), οι υπόλοιπες γκρι. Υπολογίζεται μία φορά ανά σχεδίαση.
+ */
+function catColors(year = new Date().getFullYear()) {
+  const by = new Map();
+  for (const t of allTx()) if (t.type === OUT && t.date.startsWith(year + '-')) by.set(t.cat || NO_CAT, (by.get(t.cat || NO_CAT) || 0) + t.amount);
+  const top = [...by].sort((a, b) => b[1] - a[1]).slice(0, 7).map(e => e[0]);
+  return c => { const i = top.indexOf(c || NO_CAT); return i >= 0 ? `var(--s${i + 1})` : 'var(--s-other)'; };
+}
+let colorCat = c => 'var(--s-other)';
+/** Κυκλάκι αριστερά σε κάθε κίνηση: χρώμα και αρχικό της κατηγορίας, ή σύμβολο για μεταφορές κ.λπ. */
+function txIcon(t) {
+  if (t.type === TR) return `<span class="cat-ico" style="--c:var(--tr)">${ICON_SWAP}</span>`;
+  if (t.type === ADJ) return '<span class="cat-ico sym">±</span>';
+  if (t.type === LOAN) return '<span class="cat-ico sym">⇄</span>';
+  if (t.type === HSET) return `<span class="cat-ico" style="--c:var(--house)">${ICON_SWAP}</span>`;
+  if (t.house) return `<span class="cat-ico" style="--c:var(--house)">${ICON_HOME}</span>`;
+  const letter = esc((t.cat || '?').trim().charAt(0).toUpperCase());
+  return t.type === IN
+    ? `<span class="cat-ico" style="--c:var(--pos)">${letter}</span>`
+    : `<span class="cat-ico" style="--c:${colorCat(t.cat)}">${letter}</span>`;
 }
 
 /** Πεζά χωρίς τόνους, ώστε το «καφες» να βρίσκει το «Καφές». */
@@ -981,6 +1072,7 @@ function parseQuery(text) {
 }
 
 function renderTxList() {
+  colorCat = catColors();
   const { words, amountOk } = parseQuery(ui.txQuery);
   const list = allTx()
     .filter(t => ui.txMonth === 'all' || ymOf(t.date) === ui.txMonth)
@@ -1016,7 +1108,7 @@ function renderTxList() {
       <div class="day-h"><span>${esc(dayLabel(d))}</span></div>
       <div class="list">${items.map(t => signed(t) ? `
         <button class="item" data-id="${esc(t.id)}">
-          <span class="dot ${t.type === ADJ ? 'adj' : t.type === HSET ? 'house' : 'loan'}"></span>
+          ${txIcon(t)}
           <span class="item-main">
             <b>${t.type === ADJ ? 'Διόρθωση υπολοίπου' : t.type === HSET ? `🏠 Εξόφληση ${esc(t.note)}` : `Δανεικό${t.note ? ' · ' + esc(t.note) : ''}`}</b>
             <small>${t.acc ? `${esc(accIcon(t.acc))} ${esc(t.acc)}` : 'χωρίς ταμείο'}${t.type === ADJ && t.note ? ' · ' + esc(t.note) : ''}</small>
@@ -1024,7 +1116,7 @@ function renderTxList() {
           <span class="amt ${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '−' : '+'}${eur(Math.abs(t.amount))}</span>
         </button>` : t.type === TR ? `
         <button class="item" data-id="${esc(t.id)}">
-          <span class="dot tr"></span>
+          ${txIcon(t)}
           <span class="item-main">
             <b>${esc(t.acc || '?')} → ${esc(t.to || '?')}</b>
             <small>Μεταφορά${t.note ? ' · ' + esc(t.note) : ''}</small>
@@ -1032,12 +1124,12 @@ function renderTxList() {
           <span class="amt ${ui.txAcc === t.to ? 'pos' : ui.txAcc === t.acc ? 'neg' : 'tr-amt'}">${ui.txAcc === t.to ? '+' : ui.txAcc === t.acc ? '−' : ''}${eur(t.amount)}</span>
         </button>` : `
         <button class="item" data-id="${esc(t.id)}">
-          <span class="dot ${t.house ? 'house' : t.type === IN ? 'in' : 'out'}"></span>
+          ${txIcon(t)}
           <span class="item-main">
-            <b>${esc(t.cat || NO_CAT)}${t.sub ? ' · ' + esc(t.sub) : ''}</b>
+            <b>${esc(t.cat || NO_CAT)}${t.sub ? ' · ' + esc(t.sub) : ''}${t.receipt ? ' <span class="clip" title="Έχει απόδειξη">📎</span>' : ''}</b>
             ${t.note || t.acc ? `<small>${t.acc ? `${esc(accIcon(t.acc))} ${esc(t.acc)}` : ''}${t.acc && t.note ? ' · ' : ''}${esc(t.note)}</small>` : ''}
           </span>
-          <span class="amt ${t.type === IN ? 'pos' : 'neg'}">${t.type === IN ? '+' : '−'}${eur(t.amount)}</span>
+          <span class="amt ${t.type === IN ? 'pos' : ''}">${t.type === IN ? '+' : '−'}${eur(t.amount)}</span>
         </button>`).join('')}
       </div>
     </div>`).join('');
@@ -1089,18 +1181,6 @@ function renderLoans(v) {
 
 const shareLabel = h => h.share === 50 ? 'μισά-μισά' : h.share === 100 ? `όλο για ${h.owedBy}` : h.share === 0 ? `όλο για ${h.paidBy}` : `${h.paidBy} ${100 - h.share}% · ${h.owedBy} ${h.share}%`;
 const dueHouseRecs = () => data.houseRec.filter(r => r.next && daysUntil(r.next) <= 0);
-
-/** Μικρή κάρτα στην Αρχική: ποιος χρωστάει στο Σπίτι. */
-function houseMini() {
-  if (!data.house.length || data.members.length < 2) return '';
-  const bal = houseBalance(), other = otherOf(data.profile);
-  return `
-    <button class="card house-mini" id="homeHouse">
-      <span class="list-emoji">🏠</span>
-      <span class="si-main"><b>Σπίτι</b><small>${bal > 0 ? `${esc(other)} σου χρωστάει` : bal < 0 ? `Χρωστάς → ${esc(other)}` : 'Είστε πάτσι ✓'}</small></span>
-      ${bal ? `<b class="${bal > 0 ? 'pos' : 'neg'}">${eur(Math.abs(bal))}</b>` : ''}
-    </button>`;
-}
 
 function renderHouse(v) {
   const me = data.profile, other = otherOf(me);
@@ -1159,13 +1239,13 @@ function renderHouse(v) {
 
     ${inMonth.length ? `<div class="list">${inMonth.map(h => h.kind === H_SET ? `
       <button class="item" data-house="${esc(h.id)}">
-        <span class="dot house"></span>
+        <span class="cat-ico sym">${ICON_SWAP}</span>
         <span class="item-main"><b>🤝 ${esc(h.paidBy)} → ${esc(h.owedBy)}</b><small>Εξόφληση · ${fmtDate(h.date)}${h.note ? ' · ' + esc(h.note) : ''}</small></span>
         <span class="amt tr-amt">${eur(h.amount)}</span>
       </button>` : `
       <button class="item" data-house="${esc(h.id)}">
         <span class="list-emoji">${esc(houseIcon(h.cat))}</span>
-        <span class="item-main"><b>${esc(h.cat || 'Άλλο')}${h.note ? ' · ' + esc(h.note) : ''}</b>
+        <span class="item-main"><b>${esc(h.cat || 'Άλλο')}${h.note ? ' · ' + esc(h.note) : ''}${h.receipt ? ' <span class="clip" title="Έχει απόδειξη">📎</span>' : ''}</b>
           <small>πλήρωσε <b class="payer">${esc(h.paidBy)}</b> · ${esc(shareLabel(h))} · ${fmtDate(h.date)}</small></span>
         <span class="amt">${eur(h.amount)}</span>
       </button>`).join('')}</div>` : '<div class="empty">Κανένα κοινό έξοδο αυτόν τον μήνα.</div>'}`;
@@ -1212,7 +1292,10 @@ function openHouseForm(h, opts = {}) {
   let custom = ![0, 50, 100].includes(f.share);
   let clear = !!opts.doneCount;
   let sure = false;
+  const rc = { receipt: edit ? h.receipt : '', uploads: [] };   // απόδειξη
+  let keptReceipt = null;
   const body = openSheet(opts.title || (edit ? 'Κοινό έξοδο' : 'Νέο κοινό έξοδο'));
+  sheetOnClose = () => discardReceipts(rc, keptReceipt);
   const read = () => {
     f.amount = $('#hAmt', body).value;
     f.date = $('#hDate', body).value;
@@ -1244,13 +1327,21 @@ function openHouseForm(h, opts = {}) {
       ${dateField('hDate', f.date)}
       <label class="field"><span>Σημείωση</span><input id="hNote" type="text" placeholder="προαιρετικό (π.χ. Σκλαβενίτης)" value="${esc(f.note)}" autocomplete="off"></label>
       ${opts.doneCount ? `<label class="toggle"><input id="hClear" type="checkbox" class="check" ${clear ? 'checked' : ''}> Καθάρισε και τα ${opts.doneCount} αγορασμένα από τη λίστα</label>` : ''}
+      ${receiptBox(rc)}
       ${edit ? `<p class="small muted">Το πρόσθεσε ${esc(h.addedBy || '—')}.</p>` : ''}
       ${opts.extra || ''}
+      ${edit ? '<button class="btn block" id="hAgain">↻ Ξανά το ίδιο, με σημερινή ημερομηνία</button>' : ''}
       <div class="actions">
         ${edit ? `<button class="btn danger ${sure ? 'sure' : ''}" id="hDel">${sure ? 'Σίγουρα;' : 'Διαγραφή'}</button>` : ''}
         <button class="btn primary" id="hSave">Αποθήκευση</button>
       </div>`;
     wireDateField(body, 'hDate');
+    wireReceipt(body, rc, () => { read(); draw(); });
+    const again = $('#hAgain', body);
+    if (again) again.onclick = () => openHouseForm(null, {
+      title: '↻ Ξανά το ίδιο',
+      prefill: { cat: h.cat, amount: h.amount, note: h.note, paidBy: h.paidBy, share: h.share },
+    });
     if (opts.wire) opts.wire(body);
     if (!edit && !f.amount) setTimeout(() => $('#hAmt', body)?.focus(), 60);
     $('#hAmt', body).onchange = () => { read(); draw(); };
@@ -1278,12 +1369,13 @@ function openHouseForm(h, opts = {}) {
       if (!f.date) return toast('Βάλε ημερομηνία', true);
       // Το ταμείο του πληρωτή το ορίζει μόνο ο ίδιος· αν πλήρωσε ο άλλος, κρατάμε ό,τι είχε βάλει.
       const payAcc = f.paidBy === me ? (f.payAcc || '') : (edit && h.paidBy === f.paidBy ? h.payAcc : '');
-      const row = { date: f.date, kind: H_EXP, cat: f.cat, amount, note: f.note.trim(), paidBy: f.paidBy, owedBy: otherOf(f.paidBy), share: f.share, payAcc, recvAcc: '' };
+      const row = { date: f.date, kind: H_EXP, cat: f.cat, amount, note: f.note.trim(), paidBy: f.paidBy, owedBy: otherOf(f.paidBy), share: f.share, payAcc, recvAcc: '', receipt: rc.receipt };
       if (f.paidBy === me && payAcc) store.set('household.lastAcc', payAcc);
       e.target.disabled = true;
       const ok = edit ? await run('update', { sheet: 'house', row: { ...row, id: h.id } }, 'Αποθηκεύτηκε')
         : await run('add', { sheet: 'house', row }, `🏠 ${f.cat} ${eur(amount)} — πλήρωσε ${f.paidBy}`);
       if (!ok) { e.target.disabled = false; return; }
+      keptReceipt = rc.receipt;
       if (opts.onSaved) await opts.onSaved();
       if (opts.clearList && clear) await run('clearDone', { list: opts.clearList });
       closeSheet();
@@ -1463,6 +1555,9 @@ function renderHouseSettings(v) {
 
 const ICON_CAM = '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const ICON_HOME = '<svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5"/></svg>';
+const ICON_CHEV = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+const ICON_SWAP = '<svg viewBox="0 0 24 24"><path d="M7 7h13l-4-4M17 17H4l4 4"/></svg>';
 const ICON_X = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const ICON_DOTS = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>';
 
@@ -1506,12 +1601,12 @@ async function compressImage(file, max = 1000, quality = 0.72) {
   }
 }
 /** Διαλέγει/τραβάει φωτογραφία, τη μικραίνει και την ανεβάζει. Επιστρέφει το id της. */
-async function choosePhoto() {
+async function choosePhoto(max = 1000, quality = 0.72) {
   const file = await pickImage();
   if (!file) return null;
   setBusy(true);
   try {
-    const data = await compressImage(file);
+    const data = await compressImage(file, max, quality);
     const { id } = await api('uploadPhoto', { data, mime: 'image/jpeg' });
     photoCache.set(id, data);
     return id;
@@ -1522,6 +1617,54 @@ async function choosePhoto() {
     setBusy(false);
   }
 }
+/* ----- αποδείξεις ----- */
+
+/** Φωτογραφία σε όλη την οθόνη, πάνω από τη φόρμα (χωρίς να την κλείνει). */
+function lightbox(id) {
+  const lb = document.createElement('div');
+  lb.className = 'lightbox';
+  lb.innerHTML = `<img data-photo="${esc(id)}" alt="Απόδειξη"><button class="icon-btn light" aria-label="Κλείσιμο">${ICON_X}</button>`;
+  lb.onclick = () => lb.remove();
+  document.body.appendChild(lb);
+  hydratePhotos(lb);
+}
+
+/**
+ * Πεδίο «Απόδειξη» μέσα σε φόρμα. Η φωτογραφία ανεβαίνει μόλις τη διαλέξεις·
+ * αν κλείσεις τη φόρμα χωρίς Αποθήκευση, σβήνεται από το Drive (discard).
+ */
+function receiptBox(state) {
+  return `
+    <div class="field receipt"><span>Απόδειξη</span>
+      ${state.receipt ? `
+        <div class="receipt-row">
+          <button type="button" class="thumb receipt-thumb" data-rcpt-zoom><img data-photo="${esc(state.receipt)}" alt=""></button>
+          <button type="button" class="btn small" data-rcpt-pick>📷 Αλλαγή</button>
+          <button type="button" class="btn small" data-rcpt-clear>Αφαίρεση</button>
+        </div>` : '<button type="button" class="btn small" data-rcpt-pick>📷 Πρόσθεσε απόδειξη</button>'}
+    </div>`;
+}
+/** Συνδέει το πεδίο απόδειξης. state.receipt = τρέχουσα, state.uploads = όσες ανέβηκαν σε αυτή τη φόρμα. */
+function wireReceipt(body, state, redraw) {
+  hydratePhotos(body);
+  const zoom = $('[data-rcpt-zoom]', body);
+  if (zoom) zoom.onclick = () => lightbox(state.receipt);
+  $('[data-rcpt-pick]', body).onclick = async () => {
+    const id = await choosePhoto(1600, 0.8);   // πιο καθαρή, για να διαβάζονται τα γράμματα
+    if (!id) return;
+    state.uploads.push(id);
+    state.receipt = id;
+    redraw();
+  };
+  const clr = $('[data-rcpt-clear]', body);
+  if (clr) clr.onclick = () => { state.receipt = ''; redraw(); };
+}
+/** Μετά την αποθήκευση (ή το κλείσιμο): σβήνει όσες ανέβηκαν αλλά δεν κρατήθηκαν. */
+function discardReceipts(state, kept) {
+  state.uploads.filter(id => id && id !== kept).forEach(id => api('discardPhoto', { id }).catch(() => {}));
+  state.uploads = [];
+}
+
 function whenLabel(s) {
   const [d, t] = String(s).split(' ');
   if (!d) return '';
@@ -1906,7 +2049,7 @@ function renderFinSettings(v) {
 
     <section class="card">
       <h2>Γρήγορες καταχωρήσεις</h2>
-      <p class="small muted" style="margin-top:-6px">Κουμπιά στο «+» για ό,τι γράφεις συχνά. Με ποσό: ένα πάτημα και αποθηκεύτηκε. Χωρίς ποσό: σου ζητάει μόνο το ποσό.</p>
+      <p class="small muted" style="margin-top:-6px">Κουμπιά στο «+» για ό,τι γράφεις συχνά. Ανοίγουν έτοιμα με ποσό, ταμείο και κατηγορία· αλλάζεις ό,τι χρειάζεται και πατάς Αποθήκευση.</p>
       ${data.quick.length ? `<div class="list flat">${data.quick.map(q => `
         <button class="shop-item prod-row" data-quickid="${esc(q.id)}">
           <span class="list-emoji">${esc(q.icon || '⭐')}</span>
@@ -2384,11 +2527,15 @@ function wireDateField(body, id) {
   inp.oninput = sync;
 }
 
-function openTxWizard() {
-  const f = { type: '', cat: '', sub: '', amount: '', date: isoDate(new Date()), note: '', acc: lastAcc(), to: '' };
-  let step = 'type';
+/** Νέα κίνηση βήμα-βήμα. prefill (π.χ. «Ξανά το ίδιο»): ανοίγει κατευθείαν στο τελευταίο βήμα, συμπληρωμένο. */
+function openTxWizard(prefill) {
+  const f = { type: '', cat: '', sub: '', amount: '', date: isoDate(new Date()), note: '', acc: lastAcc(), to: '', ...(prefill || {}) };
+  let step = prefill ? (f.type === TR ? 'transfer' : 'details') : 'type';
   let adding = false;
-  const body = openSheet('Νέα κίνηση');
+  const rc = { receipt: '', uploads: [] };   // απόδειξη
+  let keptReceipt = null;
+  const body = openSheet(prefill ? '↻ Ξανά το ίδιο' : 'Νέα κίνηση');
+  sheetOnClose = () => discardReceipts(rc, keptReceipt);
   const setTitle = t => { $('#sheetTitle').textContent = t; };
   const hasSubs = () => (catMap(f.type).get(f.cat) || []).length > 0;
 
@@ -2442,20 +2589,20 @@ function openTxWizard() {
           <button class="choice in" data-t="${IN}"><b>+</b><span>Έσοδο</span></button>
           ${data.members.length > 1 ? `
           <button class="choice tr slim" data-t="${TR}"><b>⇄</b><span>Μεταφορά<small>ταμείο → ταμείο</small></span></button>
-          <button class="choice house slim" id="wHouse"><b>🏠</b><span>Κοινό<small>έξοδο σπιτιού</small></span></button>` : `
+          <button class="choice house slim" id="wHouse"><b>${ICON_HOME}</b><span>Κοινό<small>έξοδο σπιτιού</small></span></button>` : `
           <button class="choice tr wide" data-t="${TR}"><b>⇄</b><span>Μεταφορά<small>από ταμείο σε ταμείο</small></span></button>`}
         </div>`;
       if ($('#wHouse', body)) $('#wHouse', body).onclick = () => openHouseForm();
       $$('[data-t]', body).forEach(b => b.onclick = () => { f.type = b.dataset.t; go(f.type === TR ? 'transfer' : 'cat'); });
       $$('[data-due]', body).forEach(b => b.onclick = () => openRecPay(data.rec.find(r => r.id === b.dataset.due)));
-      $$('[data-q]', body).forEach(b => b.onclick = async () => {
+      // Γρήγορη καταχώρηση: ανοίγει έτοιμη (ποσό, ταμείο, κατηγορία) για να αλλάξεις ό,τι χρειάζεται και Αποθήκευση.
+      $$('[data-q]', body).forEach(b => b.onclick = () => {
         const q = data.quick.find(x => x.id === b.dataset.q);
-        Object.assign(f, { type: q.type, cat: q.cat, sub: q.sub, note: tplNote(q), acc: q.acc || f.acc });
-        if (!q.amount) return go('details');     // χωρίς σταθερό ποσό: ζητάει μόνο το ποσό
-        b.disabled = true;
-        const row = { date: isoDate(new Date()), type: q.type, amount: q.amount, cat: q.cat, sub: q.sub, note: f.note, acc: f.acc || '', to: '' };
-        if (await run('add', { sheet: 'tx', row }, `${q.icon || '⭐'} ${q.name} ${eur(q.amount)} αποθηκεύτηκε`)) closeSheet();
-        else b.disabled = false;
+        Object.assign(f, {
+          type: q.type, cat: q.cat, sub: q.sub, note: tplNote(q), acc: q.acc || f.acc,
+          amount: q.amount ? String(q.amount).replace('.', ',') : '',
+        });
+        go('details');
       });
       return;
     }
@@ -2513,21 +2660,24 @@ function openTxWizard() {
         else { f.sub = b.dataset.x; go('details'); }
       });
     } else {
-      setTitle('Ποσό');
+      setTitle(prefill ? '↻ Ξανά το ίδιο' : 'Ποσό');
       body.innerHTML = `
         ${crumbs()}
         <label class="field amount"><span>Ποσό (€)</span><input id="wAmt" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${esc(f.amount)}"></label>
         ${data.acc.length ? `<div class="field"><span>${f.type === IN ? 'Μπήκαν σε' : 'Πληρώθηκε από'}</span>${accChips('wacc', f.acc)}</div>` : ''}
         ${dateField('wDate', f.date)}
         <label class="field"><span>Σημείωση</span><input id="wNote" type="text" placeholder="προαιρετικό" value="${esc(f.note)}" autocomplete="off"></label>
+        ${receiptBox(rc)}
         <div class="actions"><button class="btn primary" id="wSave">Αποθήκευση</button></div>`;
       wireDateField(body, 'wDate');
+      wireReceipt(body, rc, () => { readDetails(); draw(); });
       $$('[data-wacc]', body).forEach(b => b.onclick = () => {
         f.acc = b.dataset.wacc;
         $$('[data-wacc]', body).forEach(x => x.classList.toggle('on', x === b));
       });
       const amt = $('#wAmt', body);
-      setTimeout(() => amt.focus(), 60);
+      // Με έτοιμο ποσό δεν ανοίγει το πληκτρολόγιο, για να φαίνονται τα ταμεία και η Αποθήκευση.
+      if (!f.amount) setTimeout(() => amt.focus(), 60);
       amt.onkeydown = e => { if (e.key === 'Enter') $('#wSave', body).click(); };
       $('#wSave', body).onclick = async e => {
         readDetails();
@@ -2536,9 +2686,9 @@ function openTxWizard() {
         if (!f.date) return toast('Βάλε ημερομηνία', true);
         if (data.acc.length && !f.acc) return toast('Διάλεξε ταμείο', true);
         e.target.disabled = true;
-        const row = { date: f.date, type: f.type, amount, cat: f.cat, sub: f.sub, note: f.note.trim(), acc: f.acc, to: '' };
+        const row = { date: f.date, type: f.type, amount, cat: f.cat, sub: f.sub, note: f.note.trim(), acc: f.acc, to: '', receipt: rc.receipt };
         if (f.acc) store.set('household.lastAcc', f.acc);
-        if (await run('add', { sheet: 'tx', row }, `${f.type} ${eur(amount)} αποθηκεύτηκε`)) closeSheet();
+        if (await run('add', { sheet: 'tx', row }, `${f.type} ${eur(amount)} αποθηκεύτηκε`)) { keptReceipt = rc.receipt; closeSheet(); }
         else e.target.disabled = false;
       };
     }
@@ -2579,7 +2729,10 @@ function openTxForm(t) {
   const f = edit ? { ...t, amount: String(t.amount).replace('.', ',') } : { type: OUT, amount: '', date: isoDate(new Date()), cat: '', sub: '', note: '', acc: lastAcc(), to: '' };
   let newKind = '';        // '', 'cat' ή 'sub' — ποιο πεδίο «+ Νέα» είναι ανοιχτό
   let sureDelete = false;
+  const rc = { receipt: f.receipt || '', uploads: [] };   // απόδειξη
+  let keptReceipt = null;
   const body = openSheet(edit ? 'Επεξεργασία κίνησης' : 'Νέα κίνηση');
+  sheetOnClose = () => discardReceipts(rc, keptReceipt);
 
   const readInputs = () => {
     const a = $('#fAmt', body), d = $('#fDate', body), n = $('#fNote', body);
@@ -2625,10 +2778,17 @@ function openTxForm(t) {
         </div>` : ''}`}
       ${dateField('fDate', f.date)}
       <label class="field"><span>Σημείωση</span><input id="fNote" type="text" placeholder="προαιρετικό" value="${esc(f.note)}" autocomplete="off"></label>
+      ${f.type === TR ? '' : receiptBox(rc)}
+      ${edit ? '<button class="btn block" id="fAgain">↻ Ξανά το ίδιο, με σημερινή ημερομηνία</button>' : ''}
       <div class="actions">
         ${edit ? `<button class="btn danger ${sureDelete ? 'sure' : ''}" id="fDel">${sureDelete ? 'Σίγουρα;' : 'Διαγραφή'}</button>` : ''}
         <button class="btn primary" id="fSave">Αποθήκευση</button>
       </div>`;
+    if (f.type !== TR) wireReceipt(body, rc, () => { readInputs(); draw(); });
+    const again = $('#fAgain', body);
+    if (again) again.onclick = () => openTxWizard({
+      type: t.type, cat: t.cat, sub: t.sub, note: t.note, acc: t.acc || lastAcc(), to: t.to, amount: String(t.amount).replace('.', ','),
+    });
 
     wireDateField(body, 'fDate');
     $$('#fType button', body).forEach(b => b.onclick = () => {
@@ -2689,10 +2849,11 @@ function openTxForm(t) {
         ? { date: f.date, type: TR, amount, cat: '', sub: '', note: f.note.trim(), acc: f.acc, to: f.to }
         : { date: f.date, type: f.type, amount, cat: f.cat, sub: f.sub, note: f.note.trim(), acc: f.acc || '', to: '' };
       e.target.disabled = true;
+      row.receipt = f.type === TR ? '' : rc.receipt;
       const ok = edit
         ? await run('update', { sheet: 'tx', row: { ...row, id: t.id } }, 'Αποθηκεύτηκε')
         : await run('add', { sheet: 'tx', row }, `${f.type} ${eur(amount)} αποθηκεύτηκε`);
-      if (ok) closeSheet(); else e.target.disabled = false;
+      if (ok) { keptReceipt = row.receipt; closeSheet(); } else e.target.disabled = false;
     };
     const del = $('#fDel', body);
     if (del) del.onclick = async () => {

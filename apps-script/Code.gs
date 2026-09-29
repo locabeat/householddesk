@@ -14,7 +14,7 @@ const DEFAULT_PROFILE = 'Άννα'; // σε αυτό ανήκουν οι παλ�
 const PHOTO_FOLDER = 'Household Desk — Φωτογραφίες';
 
 const SHEETS = {
-  tx:    { name: 'Κινήσεις',   cols: { date: 'Ημερομηνία', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', note: 'Σημείωση', acc: 'Ταμείο', to: 'Προς ταμείο', profile: 'Προφίλ', id: 'ID' } },
+  tx:    { name: 'Κινήσεις',   cols: { date: 'Ημερομηνία', type: 'Τύπος', amount: 'Ποσό', cat: 'Κατηγορία', sub: 'Υποκατηγορία', note: 'Σημείωση', acc: 'Ταμείο', to: 'Προς ταμείο', receipt: 'Απόδειξη', profile: 'Προφίλ', id: 'ID' } },
   // Ταμεία (Μετρητά, τράπεζες…): από πού βγαίνουν / πού μπαίνουν τα λεφτά κάθε κίνησης.
   acc:   { name: 'Ταμεία',     cols: { name: 'Όνομα', icon: 'Εικονίδιο', start: 'Αρχικό υπόλοιπο', profile: 'Προφίλ', id: 'ID' } },
   // Πάγια: επαναλαμβανόμενες χρεώσεις (κάθε <every> <unit>), με την ημερομηνία της επόμενης.
@@ -27,14 +27,14 @@ const SHEETS = {
   shop:  { name: 'Ψώνια',  shared: true, cols: { list: 'Λίστα', name: 'Προϊόν', qty: 'Ποσότητα', note: 'Σημείωση', photo: 'Φωτογραφία', addedBy: 'Πρόσθεσε', done: 'Αγοράστηκε', doneBy: 'Από', doneAt: 'Πότε', id: 'ID' } },
   // Σπίτι (κοινά): έξοδα με το ποιος πλήρωσε και πώς μοιράζονται, και εξοφλήσεις μεταξύ σας.
   // «Μερίδιο άλλου %» = πόσο από το ποσό αναλογεί σε αυτόν που ΔΕΝ πλήρωσε (50 = μισά-μισά).
-  house:    { name: 'Σπίτι', shared: true, cols: { date: 'Ημερομηνία', kind: 'Είδος', cat: 'Κατηγορία', amount: 'Ποσό', note: 'Σημείωση', paidBy: 'Πλήρωσε', owedBy: 'Για / Προς', share: 'Μερίδιο άλλου %', payAcc: 'Ταμείο πληρωτή', recvAcc: 'Ταμείο παραλήπτη', addedBy: 'Πρόσθεσε', id: 'ID' } },
+  house:    { name: 'Σπίτι', shared: true, cols: { date: 'Ημερομηνία', kind: 'Είδος', cat: 'Κατηγορία', amount: 'Ποσό', note: 'Σημείωση', paidBy: 'Πλήρωσε', owedBy: 'Για / Προς', share: 'Μερίδιο άλλου %', payAcc: 'Ταμείο πληρωτή', recvAcc: 'Ταμείο παραλήπτη', receipt: 'Απόδειξη', addedBy: 'Πρόσθεσε', id: 'ID' } },
   houseCat: { name: 'Κατηγορίες Σπιτιού', shared: true, cols: { name: 'Όνομα', icon: 'Εικονίδιο', id: 'ID' } },
   houseRec: { name: 'Πάγια Σπιτιού', shared: true, cols: { name: 'Όνομα', cat: 'Κατηγορία', amount: 'Ποσό', paidBy: 'Πληρώνει', share: 'Μερίδιο άλλου %', every: 'Κάθε', unit: 'Περίοδος', next: 'Επόμενη χρέωση', id: 'ID' } },
   // Αποθηκευμένα προϊόντα: κρατάνε τη φωτογραφία ώστε να ξαναχρησιμοποιείται.
   prod:  { name: 'Προϊόντα', shared: true, cols: { name: 'Όνομα', photo: 'Φωτογραφία', list: 'Λίστα', id: 'ID' } },
 };
 // Στήλες που προστίθενται αυτόματα αν λείπουν από το φύλλο.
-const AUTO_COLS = ['acc', 'to', 'profile', 'id'];
+const AUTO_COLS = ['acc', 'to', 'receipt', 'profile', 'id'];
 // Στήλες που δεν μετράνε για να θεωρηθεί μια γραμμή «γεμάτη».
 const META_COLS = ['paid', 'done', 'profile', 'id'];
 
@@ -84,6 +84,7 @@ function doPost(e) {
       case 'clearDone':   res = clearDone_(p, profile); break;
       case 'uploadPhoto': res = uploadPhoto_(p); break;
       case 'photo':       res = photo_(p.id); break;
+      case 'discardPhoto': trashIfUnused_(p.id); res = {}; break;
       case 'changePin':   res = changePin_(p, profile); break;
       default: throw new Error('Άγνωστη ενέργεια');
     }
@@ -301,6 +302,7 @@ function update_(key, row, profile) {
     res.doneAt = done ? Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm') : '';
   }
   const oldPhoto = inf.idx.photo != null ? str_(inf.rows[i][inf.idx.photo]) : '';
+  const oldReceipt = inf.idx.receipt != null ? str_(inf.rows[i][inf.idx.receipt]) : '';
   inf.sh.getRange(i + 2, 1, 1, inf.width).setValues([cur]);
   if (key === 'shop' && ('photo' in row || 'name' in row)) {
     const name = str_(cur[inf.idx.name]), photo = str_(cur[inf.idx.photo]);
@@ -308,6 +310,7 @@ function update_(key, row, profile) {
   }
   if (key === 'prod' && 'photo' in row) syncProductPhoto_(str_(cur[inf.idx.name]), str_(row.photo));
   if (oldPhoto && oldPhoto !== str_(cur[inf.idx.photo])) trashIfUnused_(oldPhoto);
+  if (oldReceipt && oldReceipt !== str_(cur[inf.idx.receipt])) trashIfUnused_(oldReceipt);
   return res;
 }
 
@@ -315,7 +318,9 @@ function remove_(key, id, profile) {
   const inf = info_(key);
   const i = findRow_(inf, id, profile);
   const photo = inf.idx.photo != null ? str_(inf.rows[i][inf.idx.photo]) : '';
+  const receipt = inf.idx.receipt != null ? str_(inf.rows[i][inf.idx.receipt]) : '';
   inf.sh.deleteRow(i + 2);
+  if (receipt) trashIfUnused_(receipt);
   if (key === 'prod') {
     // Το προϊόν φεύγει από τα αποθηκευμένα: βγαίνει η φωτογραφία και από τα προϊόντα των λιστών.
     const name = str_(inf.rows[i][inf.idx.name]);
@@ -379,6 +384,9 @@ function trashIfUnused_(id) {
   const used = ['prod', 'shop'].some(key => {
     const inf = info_(key);
     return inf.rows.some(r => str_(r[inf.idx.photo]) === id);
+  }) || ['tx', 'house'].some(key => {
+    const inf = info_(key);
+    return inf.rows.some(r => str_(r[inf.idx.receipt]) === id);
   });
   if (!used) trashPhoto_(id);
 }
