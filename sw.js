@@ -1,10 +1,10 @@
 // Κρατάει τα αρχεία του app για να ανοίγει γρήγορα και χωρίς internet.
 // Αλλάζεις τον αριθμό σε κάθε νέα έκδοση ώστε να ανανεωθεί η cache.
-const CACHE = 'household-v8';
+const CACHE = 'household-v9';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(a => new Request(a, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -32,8 +32,9 @@ self.addEventListener('fetch', e => {
   }
 
   // Αρχεία του app: πρώτα δίκτυο (για να φαίνονται οι αλλαγές), αλλιώς cache.
+  // no-cache: ο browser ρωτάει πάντα τον server αν άλλαξε κάτι, ώστε να μη μένουν μισά παλιά αρχεία.
   if (url.origin === self.location.origin) {
-    e.respondWith(fetch(req).then(res => {
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy));
       return res;
