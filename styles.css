@@ -323,7 +323,7 @@ label.toggle { display: flex; align-items: center; gap: 10px; margin: 14px 0; fo
 .date-row .chip { flex: none; }
 
 /* login & account */
-body.logged-out .tabbar, body.logged-out #refreshBtn, body.logged-out #shopBtn { display: none; }
+body.logged-out .tabbar, body.logged-out #refreshBtn, body.logged-out #shopBtn, body.logged-out #houseBtn { display: none; }
 body.logged-out .topbar { background: transparent; border-bottom-color: transparent; }
 body.logged-out .topbar h1 { visibility: hidden; }
 .login { max-width: 380px; margin: 4vh auto 0; text-align: center; }
