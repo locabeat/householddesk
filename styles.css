@@ -782,3 +782,15 @@ body.logged-out #pending { display: none; }
   pointer-events: none; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text);
 }
 .date-row .date-wrap { flex: 1; }
+
+/* «Από πριν → Στο τέλος» */
+.bal-strip {
+  display: flex; align-items: center; gap: 10px; margin: 12px 0 2px; padding: 10px 12px;
+  border-radius: 14px; background: var(--chip);
+}
+.bal-strip > div { flex: 1; min-width: 0; }
+.bal-strip > div:last-child { text-align: right; }
+.bal-strip span { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+.bal-strip b { display: block; font-size: 16px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
+.bal-strip i { color: var(--muted); display: grid; }
+.bal-strip i svg { width: 18px; height: 18px; }

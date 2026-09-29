@@ -210,12 +210,17 @@ function houseVirtual() {
 /** Όλες οι κινήσεις σου: οι δικές σου + το μερίδιό σου από το Σπίτι. */
 const allTx = () => [...data.tx, ...houseVirtual()];
 
-/** Υπόλοιπο κάθε ταμείου: αρχικό + έσοδα − έξοδα ± μεταφορές. */
-function accBalances() {
+/**
+ * Υπόλοιπο κάθε ταμείου: αρχικό + έσοδα − έξοδα ± μεταφορές.
+ * upTo (ηη προαιρετικό, yyyy-mm-dd): μόνο κινήσεις μέχρι και εκείνη τη μέρα. Το «αρχικό υπόλοιπο» μετράει πάντα (είναι πριν από όλα).
+ */
+function accBalances(upTo = '') {
   const bal = new Map(data.acc.map(a => [a.name, a.start]));
   const add = (name, n) => { if (bal.has(name)) bal.set(name, bal.get(name) + n); };
-  for (const v of houseVirtual()) if (v.cashAcc) add(v.cashAcc, v.cash);
+  const inRange = t => !upTo || t.date <= upTo;
+  for (const v of houseVirtual()) if (v.cashAcc && inRange(v)) add(v.cashAcc, v.cash);
   for (const t of data.tx) {
+    if (!inRange(t)) continue;
     if (t.type === IN) add(t.acc, t.amount);
     else if (t.type === OUT) add(t.acc, -t.amount);
     else if (t.type === TR) { add(t.acc, -t.amount); add(t.to, t.amount); }
@@ -223,6 +228,10 @@ function accBalances() {
   }
   return bal;
 }
+/** Σύνολο όλων των ταμείων στο τέλος μιας μέρας (ή πριν από την πρώτη κίνηση, για αρχή περιόδου). */
+const totalAt = upTo => round2(sum([...accBalances(upTo).values()]));
+/** Η προηγούμενη μέρα ενός yyyy-mm-dd (για «από πριν» = τέλος της προηγούμενης μέρας). */
+function dayBefore(iso) { const [y, m, d] = iso.split('-').map(Number); return isoDate(new Date(y, m - 1, d - 1)); }
 
 /** Επόμενη ημερομηνία πάγιου: +n εβδομάδες/μήνες/χρόνια (στο τέλος του μήνα αν δεν υπάρχει η μέρα). */
 function addPeriod(iso, n, unit) {
@@ -736,10 +745,11 @@ function renderHome(v) {
         <div class="label">${MONTHS[ui.month]} ${ui.year}</div>
         <button class="icon-btn" id="mNext" aria-label="Επόμενος μήνας"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
       </div>
+      ${balStrip(`${ui.year}-${mm}-01`, isoDate(new Date(ui.year, ui.month + 1, 0)), 'Στην αρχή του μήνα', 'Στο τέλος του μήνα')}
       <div class="stats">
         <div><span>Έσοδα</span><b class="pos">${eur(mIn)}</b>${delta(cIn, pIn, true)}</div>
         <div><span>Έξοδα</span><b>${eur(mOut)}</b>${delta(cOut, pOut, false)}</div>
-        <div><span>Υπόλοιπο</span><b class="${mIn - mOut < 0 ? 'neg' : ''}">${eur(mIn - mOut)}</b></div>
+        <div><span>Διαφορά</span><b class="${mIn - mOut < 0 ? 'neg' : ''}">${mIn - mOut > 0 ? '+' : ''}${eur(mIn - mOut)}</b></div>
       </div>
       ${hasPrev ? `
         <div class="cmp">
@@ -781,10 +791,11 @@ function renderHome(v) {
         <h2>Η χρονιά</h2>
         <select id="yearSel" class="year-select">${years.map(y => `<option ${y === ui.year ? 'selected' : ''}>${y}</option>`).join('')}</select>
       </div>
+      ${balStrip(`${ui.year}-01-01`, `${ui.year}-12-31`, 'Στην αρχή της χρονιάς', 'Στο τέλος της χρονιάς')}
       <div class="stats">
         <div><span>Έσοδα</span><b class="pos">${eur(totIn)}</b></div>
         <div><span>Έξοδα</span><b>${eur(totOut)}</b></div>
-        <div><span>Υπόλοιπο</span><b class="${totIn - totOut < 0 ? 'neg' : ''}">${eur(totIn - totOut)}</b></div>
+        <div><span>Διαφορά</span><b class="${totIn - totOut < 0 ? 'neg' : ''}">${totIn - totOut > 0 ? '+' : ''}${eur(totIn - totOut)}</b></div>
       </div>
       <div class="chart-wrap"><canvas id="chart" aria-label="Έσοδα και έξοδα ανά μήνα"></canvas></div>
       <details class="table-toggle">
@@ -848,8 +859,8 @@ function attentionCard() {
         <div class="rec-row ${isDue ? 'due' : ''}" data-rec="${esc(r.id)}">
           ${recDate(r.next)}
           <span class="si-main"><b>${esc(r.name)}</b><small>${when(r)}</small></span>
-          <span class="amt">${r.type === IN ? '+' : ''}${eur(r.amount)}</span>
-          <button class="rec-ok ${isDue ? '' : 'soft'}" data-recpay="${esc(r.id)}" aria-label="Χρεώθηκε">${ICON_CHECK}</button>
+          <span class="amt ${r.type === IN ? 'pos' : ''}">${r.type === IN ? '+' : ''}${eur(r.amount)}</span>
+          <button class="rec-ok ${isDue ? '' : 'soft'}" data-recpay="${esc(r.id)}" aria-label="${r.type === IN ? 'Μπήκαν' : 'Χρεώθηκε'}">${ICON_CHECK}</button>
         </div>`;
       }).join('')}
       ${house ? `
@@ -874,12 +885,12 @@ function openRecPay(r) {
   const body = openSheet(r.name);
   body.innerHTML = `
     <p class="small muted" style="margin-top:4px">${esc(freqLabel(r))} · ${esc(r.cat || NO_CAT)}${r.sub ? ' · ' + esc(r.sub) : ''} · χρέωση ${fmtDate(r.next)}</p>
-    <label class="field amount"><span>Ποσό που χρεώθηκε (€)</span><input id="rpAmt" inputmode="decimal" autocomplete="off" value="${esc(f.amount)}"></label>
+    <label class="field amount"><span>${r.type === IN ? 'Ποσό που μπήκε' : 'Ποσό που χρεώθηκε'} (€)</span><input id="rpAmt" inputmode="decimal" autocomplete="off" value="${esc(f.amount)}"></label>
     ${data.acc.length ? `<div class="field"><span>${r.type === IN ? 'Μπήκαν σε' : 'Πληρώθηκε από'}</span>${accChips('rpacc', f.acc)}</div>` : ''}
     ${dateField('rpDate', f.date)}
     <div class="actions">
       <button class="btn" id="rpSkip">Παράλειψη</button>
-      <button class="btn primary" id="rpOk">✓ Χρεώθηκε</button>
+      <button class="btn primary" id="rpOk">${r.type === IN ? '✓ Μπήκαν' : '✓ Χρεώθηκε'}</button>
     </div>
     <button class="link-btn block-link" id="rpEdit">✎ Αλλαγή πάγιου</button>`;
   wireDateField(body, 'rpDate');
@@ -893,10 +904,29 @@ function openRecPay(r) {
     if (await payRec(r, { amount, date, acc: f.acc })) closeSheet(); else e.target.disabled = false;
   };
   $('#rpSkip', body).onclick = async () => {
-    if (!await confirmBox(`Παράλειψη «${r.name}»;`, `Δεν καταχωρείται τίποτα αυτή τη φορά. Η επόμενη χρέωση πάει στις ${fmtDate(addPeriod(r.next, r.every, r.unit))}.`, 'Παράλειψη')) return;
+    if (!await confirmBox(`Παράλειψη «${r.name}»;`, `Δεν καταχωρείται τίποτα αυτή τη φορά. Η επόμενη φορά πάει στις ${fmtDate(addPeriod(r.next, r.every, r.unit))}.`, 'Παράλειψη')) return;
     run('update', { sheet: 'rec', row: { id: r.id, next: addPeriod(r.next, r.every, r.unit) } }, 'Παραλείφθηκε');
   };
   $('#rpEdit', body).onclick = () => openTplForm('rec', r);
+}
+
+/**
+ * «Από πριν → Στο τέλος» για μια περίοδο: πόσα είχαν όλα τα ταμεία μαζί στην αρχή της
+ * (τέλος της προηγούμενης μέρας) και στο τέλος της. Για τον τρέχοντα μήνα/χρόνο, «Σήμερα».
+ */
+function balStrip(from, to, fromLbl, toLbl) {
+  if (!data.acc.length) return '';
+  const todayIso = isoDate(new Date());
+  if (from > todayIso) return '';
+  const open = totalAt(dayBefore(from));
+  const cur = to >= todayIso;
+  const close = totalAt(cur ? todayIso : to);
+  return `
+    <div class="bal-strip">
+      <div><span>${fromLbl}</span><b>${eur(open)}</b></div>
+      <i aria-hidden="true">${ICON_CHEV}</i>
+      <div><span>${cur ? 'Σήμερα' : toLbl}</span><b class="${close < open ? 'neg' : close > open ? 'pos' : ''}">${eur(close)}</b></div>
+    </div>`;
 }
 
 /** Η κεντρική κάρτα της Αρχικής: πόσα λεφτά έχεις (σύνολο ταμείων) και ο τρέχων μήνας με μια ματιά. */
@@ -2036,14 +2066,19 @@ function renderFinSettings(v) {
 
     <section class="card">
       <h2>Πάγια</h2>
-      <p class="small muted" style="margin-top:-6px">Λογαριασμοί και συνδρομές που έρχονται τακτικά. Τη μέρα της χρέωσης εμφανίζονται στην Αρχική για να πατήσεις ✓ Χρεώθηκε.</p>
+      <p class="small muted" style="margin-top:-6px">Ό,τι έρχεται τακτικά: λογαριασμοί και συνδρομές (Έξοδο) ή μισθός κ.λπ. (Έσοδο). Τη μέρα τους εμφανίζονται στην Αρχική για να πατήσεις ✓.</p>
       ${data.rec.length ? `<div class="list flat">${[...data.rec].sort((a, b) => a.next.localeCompare(b.next)).map(r => `
         <button class="shop-item prod-row" data-recid="${esc(r.id)}">
           ${recDate(r.next)}
           <span class="si-main"><b>${esc(r.name)}</b><small>${esc(freqLabel(r))}${r.acc ? ` · ${esc(accIcon(r.acc))} ${esc(r.acc)}` : ''}</small></span>
-          <span class="amt ${r.type === IN ? 'pos' : 'neg'}">${eur(r.amount)}</span>
+          <span class="amt ${r.type === IN ? 'pos' : ''}">${r.type === IN ? '+' : ''}${eur(r.amount)}</span>
         </button>`).join('')}</div>
-        <p class="small muted">Μηνιαίο σύνολο πάγιων εξόδων: <b>${eur(sum(data.rec.filter(r => r.type === OUT).map(r => r.amount * (r.unit === 'εβδομάδα' ? 52 / 12 : r.unit === 'χρόνος' ? 1 / 12 : 1) / r.every)))}</b></p>` : '<p class="muted small">Δεν υπάρχουν πάγια ακόμα.</p>'}
+        ${(() => {
+          // Ό,τι έρχεται κάθε εβδομάδα/χρόνο αναγάγεται σε μήνα.
+          const monthly = type => sum(data.rec.filter(r => r.type === type).map(r => r.amount * (r.unit === 'εβδομάδα' ? 52 / 12 : r.unit === 'χρόνος' ? 1 / 12 : 1) / r.every));
+          const inc = monthly(IN), out = monthly(OUT);
+          return `<p class="small muted">Τον μήνα: ${inc ? `πάγια έσοδα <b class="pos">${eur(inc)}</b> · ` : ''}πάγια έξοδα <b>${eur(out)}</b>${inc ? ` · περισσεύουν <b class="${inc - out < 0 ? 'neg' : ''}">${eur(inc - out)}</b>` : ''}</p>`;
+        })()}` : '<p class="muted small">Δεν υπάρχουν πάγια ακόμα.</p>'}
       <button class="btn primary block" id="addRec">+ Νέο πάγιο</button>
     </section>
 
@@ -2314,30 +2349,50 @@ function openAccForm(a) {
 
 /** Διόρθωση υπολοίπου: γράφεις πόσα έχει πραγματικά το ταμείο, μπαίνει κίνηση για τη διαφορά. */
 function openAdjust(a) {
-  const cur = round2(accBalances().get(a.name) || 0);
+  const today0 = isoDate(new Date());
+  let date = today0;
+  // Τι δείχνει το app για το ταμείο στο τέλος της ημερομηνίας που διάλεξες.
+  const appAt = () => round2(accBalances(date).get(a.name) || 0);
+  let cur = appAt();
   const body = openSheet(`Διόρθωση · ${a.name}`);
   body.innerHTML = `
-    <div class="adj-now"><span>Το app δείχνει</span><b>${eur(cur)}</b></div>
-    <label class="field amount"><span>Πόσα έχει πραγματικά τώρα; (€)</span><input id="adjReal" inputmode="decimal" autocomplete="off" placeholder="${esc(String(cur).replace('.', ','))}"></label>
-    <p class="small muted" id="adjDiff">Γράψε το υπόλοιπο που βλέπεις στην τράπεζα ή στο πορτοφόλι. Η διαφορά μπαίνει ως «Διόρθωση» και δεν μετράει στα έσοδα/έξοδα.</p>
-    <label class="field"><span>Σημείωση</span><input id="adjNote" type="text" placeholder="προαιρετικό (π.χ. ξεχασμένα καφεδάκια)" autocomplete="off"></label>
+    ${dateField('adjDate', date)}
+    <div class="adj-now"><span id="adjNowLbl">Το app δείχνει σήμερα</span><b id="adjNow">${eur(cur)}</b></div>
+    <label class="field amount"><span id="adjRealLbl">Πόσα έχει πραγματικά; (€)</span><input id="adjReal" inputmode="decimal" autocomplete="off" placeholder="${esc(String(cur).replace('.', ','))}"></label>
+    <p class="small muted" id="adjDiff">Γράψε το υπόλοιπο που βλέπεις στην τράπεζα ή στο πορτοφόλι εκείνη τη μέρα. Η διαφορά μπαίνει ως «Διόρθωση» με αυτή την ημερομηνία και δεν μετράει στα έσοδα/έξοδα.</p>
+    <label class="field"><span>Σημείωση</span><input id="adjNote" type="text" placeholder="προαιρετικό (π.χ. υπόλοιπο έναρξης)" autocomplete="off"></label>
     <button class="btn primary block" id="adjOk">Διόρθωση</button>`;
   const inp = $('#adjReal', body);
-  setTimeout(() => inp.focus(), 60);
-  inp.oninput = () => {
-    if (!inp.value.trim()) return;
+  const showDiff = () => {
+    if (!inp.value.trim()) { $('#adjDiff', body).textContent = 'Γράψε το υπόλοιπο που βλέπεις στην τράπεζα ή στο πορτοφόλι εκείνη τη μέρα.'; return; }
     const d = round2(num(inp.value) - cur);
     $('#adjDiff', body).innerHTML = d === 0 ? 'Συμφωνεί ήδη ✓'
       : `Διαφορά: <b class="${d < 0 ? 'neg' : 'pos'}">${d < 0 ? '−' : '+'}${eur(Math.abs(d))}</b>`;
   };
+  // Αλλαγή ημερομηνίας: ξαναϋπολογίζεται τι έδειχνε το app εκείνη τη μέρα.
+  const onDate = () => {
+    date = $('#adjDate', body).value || today0;
+    cur = appAt();
+    $('#adjNowLbl', body).textContent = date === today0 ? 'Το app δείχνει σήμερα' : `Το app δείχνει στις ${fmtDate(date)}`;
+    $('#adjNow', body).textContent = eur(cur);
+    inp.placeholder = String(cur).replace('.', ',');
+    showDiff();
+  };
+  wireDateField(body, 'adjDate');
+  const di = $('#adjDate', body);
+  const prevInput = di.oninput;
+  di.oninput = () => { prevInput(); onDate(); };
+  $$('[data-date]', body).forEach(c => { const f = c.onclick; c.onclick = () => { f(); onDate(); }; });
+  setTimeout(() => inp.focus(), 60);
+  inp.oninput = showDiff;
   inp.onkeydown = e => { if (e.key === 'Enter') $('#adjOk', body).click(); };
   $('#adjOk', body).onclick = async e => {
     if (!inp.value.trim()) { inp.focus(); return toast('Γράψε το πραγματικό υπόλοιπο', true); }
     const diff = round2(num(inp.value) - cur);
     if (diff === 0) { closeSheet(); return toast('Συμφωνεί ήδη ✓'); }
     e.target.disabled = true;
-    const row = { date: isoDate(new Date()), type: ADJ, amount: diff, cat: '', sub: '', note: $('#adjNote', body).value.trim(), acc: a.name, to: '' };
-    if (await run('add', { sheet: 'tx', row }, `${a.name}: υπόλοιπο ${eur(num(inp.value))}`)) closeSheet(); else e.target.disabled = false;
+    const row = { date, type: ADJ, amount: diff, cat: '', sub: '', note: $('#adjNote', body).value.trim(), acc: a.name, to: '' };
+    if (await run('add', { sheet: 'tx', row }, `${a.name}: ${eur(num(inp.value))} στις ${fmtDate(date)}`)) closeSheet(); else e.target.disabled = false;
   };
 }
 
