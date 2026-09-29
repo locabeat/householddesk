@@ -794,3 +794,8 @@ body.logged-out #pending { display: none; }
 .bal-strip b { display: block; font-size: 16px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
 .bal-strip i { color: var(--muted); display: grid; }
 .bal-strip i svg { width: 18px; height: 18px; }
+
+/* ειδοποιήσεις */
+.push-row { align-items: flex-start; }
+.push-ctrls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.push-ctrls input[type=time] { width: auto; min-width: 104px; padding: 8px 10px; }

@@ -32,6 +32,8 @@ const SHEETS = {
   houseRec: { name: 'Πάγια Σπιτιού', shared: true, cols: { name: 'Όνομα', cat: 'Κατηγορία', amount: 'Ποσό', paidBy: 'Πληρώνει', share: 'Μερίδιο άλλου %', every: 'Κάθε', unit: 'Περίοδος', next: 'Επόμενη χρέωση', id: 'ID' } },
   // Αποθηκευμένα προϊόντα: κρατάνε τη φωτογραφία ώστε να ξαναχρησιμοποιείται.
   prod:  { name: 'Προϊόντα', shared: true, cols: { name: 'Όνομα', photo: 'Φωτογραφία', list: 'Λίστα', id: 'ID' } },
+  // Ειδοποιήσεις: μία γραμμή ανά συσκευή (Web Push), με την ώρα της καθημερινής υπενθύμισης.
+  push:  { name: 'Ειδοποιήσεις', cols: { endpoint: 'Endpoint', p256dh: 'Κλειδί', auth: 'Auth', time: 'Ώρα', last: 'Στάλθηκε', device: 'Συσκευή', profile: 'Προφίλ', id: 'ID' } },
 };
 // Στήλες που προστίθενται αυτόματα αν λείπουν από το φύλλο.
 const AUTO_COLS = ['acc', 'to', 'receipt', 'profile', 'id'];
@@ -65,7 +67,7 @@ function doPost(e) {
   if (!profile) return json_({ ok: false, error: 'Λάθος PIN' });
 
   // Οι αναγνώσεις δεν περιμένουν στην ουρά πίσω από τις αλλαγές (το κλείδωμα είναι μόνο για εγγραφές).
-  const needLock = p.action !== 'all' && p.action !== 'photo';
+  const needLock = ['all', 'photo', 'reminder', 'pushKey'].indexOf(p.action) < 0;
   const lock = LockService.getScriptLock();
   if (needLock) lock.waitLock(20000);
   try {
@@ -85,6 +87,11 @@ function doPost(e) {
       case 'uploadPhoto': res = uploadPhoto_(p); break;
       case 'photo':       res = photo_(p.id); break;
       case 'discardPhoto': trashIfUnused_(p.id); res = {}; break;
+      case 'pushKey':     res = { key: vapidKeys_().pub }; break;
+      case 'pushSave':    res = pushSave_(p, profile); break;
+      case 'pushDelete':  res = pushDelete_(p, profile); break;
+      case 'pushTest':    res = { code: sendPush_(str_(p.endpoint)) }; break;
+      case 'reminder':    res = reminderFor_(profile); break;
       case 'changePin':   res = changePin_(p, profile); break;
       default: throw new Error('Άγνωστη ενέργεια');
     }
@@ -239,7 +246,7 @@ function read_(key, profile) {
     for (const k in inf.idx) {
       if (k === 'profile') continue;
       let v = r[inf.idx[k]];
-      if (v instanceof Date) v = Utilities.formatDate(v, tz, k === 'doneAt' ? 'yyyy-MM-dd HH:mm' : 'yyyy-MM-dd');
+      if (v instanceof Date) v = Utilities.formatDate(v, tz, k === 'doneAt' ? 'yyyy-MM-dd HH:mm' : k === 'time' ? 'HH:mm' : 'yyyy-MM-dd');
       o[k] = v;
     }
     return o;
@@ -254,6 +261,7 @@ function toCell_(k, v) {
   if (k === 'amount' || k === 'start' || k === 'share') return Number(v) || 0;
   if (k === 'paid' || k === 'done') return v === true || v === 'true';
   if (k === 'doneAt') return v instanceof Date ? v : str_(v);
+  if (k === 'time') return "'" + str_(v);   // κείμενο «21:00», όχι ώρα του Sheets
   return str_(v);
 }
 
@@ -574,4 +582,219 @@ function trashPhoto_(id) {
     const parents = file.getParents();
     if (parents.hasNext() && parents.next().getName() === PHOTO_FOLDER) file.setTrashed(true);
   } catch (err) { /* ήδη σβησμένη */ }
+}
+
+/* ---------- Ειδοποιήσεις (Web Push): υπογραφή VAPID με ECDSA P-256 ---------- */
+// Το Apps Script δεν έχει ECDSA, οπότε η καμπύλη P-256 υλοποιείται εδώ με BigInt.
+// Χρειάζεται μόνο: SHA-256 και HMAC-SHA256 (από Utilities).
+
+const B0_ = BigInt(0), B1_ = BigInt(1), B2_ = BigInt(2), B3_ = BigInt(3), B4_ = BigInt(4), B8_ = BigInt(8), B255_ = BigInt(255);
+
+const P256_ = {
+  p: BigInt('0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff'),
+  n: BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551'),
+  a: BigInt('0xffffffff00000001000000000000000000000000fffffffffffffffffffffffc'),
+  Gx: BigInt('0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'),
+  Gy: BigInt('0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5'),
+};
+
+function ecMod_(a, m) { const r = a % m; return r < B0_ ? r + m : r; }
+function ecInv_(a, m) {           // αντίστροφος (Euclid)
+  let [r0, r1] = [ecMod_(a, m), m], [s0, s1] = [B1_, B0_];
+  while (r1 !== B0_) { const q = r0 / r1; [r0, r1] = [r1, r0 - q * r1]; [s0, s1] = [s1, s0 - q * s1]; }
+  return ecMod_(s0, m);
+}
+// Σημεία σε Jacobian συντεταγμένες [X, Y, Z]· null = σημείο στο άπειρο.
+function ecDouble_(P) {
+  if (!P) return null;
+  const p = P256_.p, [X, Y, Z] = P;
+  if (Y === B0_) return null;
+  const YY = ecMod_(Y * Y, p), S = ecMod_(B4_ * X * YY, p);
+  const ZZ = ecMod_(Z * Z, p);
+  const M = ecMod_(B3_ * (X - ZZ) * (X + ZZ), p);           // a = -3
+  const X3 = ecMod_(M * M - B2_ * S, p);
+  const Y3 = ecMod_(M * (S - X3) - B8_ * YY * YY, p);
+  const Z3 = ecMod_(B2_ * Y * Z, p);
+  return [X3, Y3, Z3];
+}
+function ecAdd_(P, Q) {
+  if (!P) return Q; if (!Q) return P;
+  const p = P256_.p, [X1, Y1, Z1] = P, [X2, Y2, Z2] = Q;
+  const Z1Z1 = ecMod_(Z1 * Z1, p), Z2Z2 = ecMod_(Z2 * Z2, p);
+  const U1 = ecMod_(X1 * Z2Z2, p), U2 = ecMod_(X2 * Z1Z1, p);
+  const S1 = ecMod_(Y1 * Z2 * Z2Z2, p), S2 = ecMod_(Y2 * Z1 * Z1Z1, p);
+  if (U1 === U2) return S1 === S2 ? ecDouble_(P) : null;
+  const H = ecMod_(U2 - U1, p), R = ecMod_(S2 - S1, p);
+  const HH = ecMod_(H * H, p), HHH = ecMod_(H * HH, p), V = ecMod_(U1 * HH, p);
+  const X3 = ecMod_(R * R - HHH - B2_ * V, p);
+  const Y3 = ecMod_(R * (V - X3) - S1 * HHH, p);
+  const Z3 = ecMod_(Z1 * Z2 * H, p);
+  return [X3, Y3, Z3];
+}
+function ecMulG_(k) {             // k·G, επιστρέφει [x, y] (affine)
+  let R = null, Q = [P256_.Gx, P256_.Gy, B1_];
+  while (k > B0_) { if (k & B1_) R = ecAdd_(R, Q); Q = ecDouble_(Q); k >>= B1_; }
+  const p = P256_.p, zi = ecInv_(R[2], p), zi2 = ecMod_(zi * zi, p);
+  return [ecMod_(R[0] * zi2, p), ecMod_(R[1] * zi2 * zi, p)];
+}
+
+// Βοηθητικά για bytes (0..255).
+const u8_ = arr => arr.map(b => b & 255);
+function bytesToBig_(b) { let x = B0_; for (const v of b) x = (x << B8_) | BigInt(v & 255); return x; }
+function bigToBytes_(x, len) { const out = new Array(len); for (let i = len - 1; i >= 0; i--) { out[i] = Number(x & B255_); x >>= B8_; } return out; }
+
+/**
+ * Υπογραφή ECDSA P-256 / SHA-256 (ντετερμινιστική κατά RFC 6979), σε μορφή JOSE (r||s, 64 bytes).
+ * sha256(bytes) → bytes, hmac(keyBytes, dataBytes) → bytes.
+ */
+function ecdsaSign_(msgBytes, d, sha256, hmac) {
+  const n = P256_.n;
+  const h = u8_(sha256(msgBytes));
+  const z = bytesToBig_(h);
+  const x = bigToBytes_(d, 32), h1 = bigToBytes_(ecMod_(z, n), 32);
+  let V = new Array(32).fill(1), K = new Array(32).fill(0);
+  K = u8_(hmac(K, [...V, 0, ...x, ...h1])); V = u8_(hmac(K, V));
+  K = u8_(hmac(K, [...V, 1, ...x, ...h1])); V = u8_(hmac(K, V));
+  for (;;) {
+    V = u8_(hmac(K, V));
+    const k = bytesToBig_(V);
+    if (k >= B1_ && k < n) {
+      const r = ecMod_(ecMulG_(k)[0], n);
+      const s = ecMod_(ecInv_(k, n) * (z + r * d), n);
+      if (r !== B0_ && s !== B0_) return [...bigToBytes_(r, 32), ...bigToBytes_(s, 32)];
+    }
+    K = u8_(hmac(K, [...V, 0])); V = u8_(hmac(K, V));
+  }
+}
+
+/** Νέο ζευγάρι κλειδιών από 32 τυχαία bytes: επιστρέφει { d (BigInt), pub (65 bytes, 0x04||X||Y) }. */
+function ecKeyPair_(seedBytes) {
+  const d = ecMod_(bytesToBig_(seedBytes), P256_.n - B1_) + B1_;
+  const [X, Y] = ecMulG_(d);
+  return { d, pub: [4, ...bigToBytes_(X, 32), ...bigToBytes_(Y, 32)] };
+}
+
+// Utilities δουλεύει με bytes -128..127.
+const signed_ = arr => arr.map(v => { v &= 255; return v > 127 ? v - 256 : v; });
+const sha256G_ = b => Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, signed_(b));
+const hmacG_ = (k, d) => Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_256, signed_(d), signed_(k));
+const b64u_ = bytes => Utilities.base64EncodeWebSafe(signed_(bytes)).replace(/=+$/, '');
+const utf8_ = s => u8_(Utilities.newBlob(s).getBytes());
+
+/** Τα κλειδιά VAPID του app: φτιάχνονται αυτόματα την πρώτη φορά και μένουν στα Script properties. */
+function vapidKeys_() {
+  const props = PropertiesService.getScriptProperties();
+  let d = props.getProperty('VAPID_D'), pub = props.getProperty('VAPID_PUB');
+  if (!d || !pub) {
+    const seed = u8_(sha256G_(utf8_(Utilities.getUuid() + Utilities.getUuid() + Date.now() + Math.random())));
+    const kp = ecKeyPair_(seed);
+    d = kp.d.toString(16); pub = b64u_(kp.pub);
+    props.setProperties({ VAPID_D: d, VAPID_PUB: pub });
+  }
+  return { d: BigInt('0x' + d), pub };
+}
+
+/** Στέλνει «ξύπνα» σε μια συσκευή (χωρίς περιεχόμενο· το μήνυμα το φέρνει η ίδια η συσκευή). Επιστρέφει τον κωδικό HTTP. */
+function sendPush_(endpoint) {
+  const m = String(endpoint).match(/^https:\/\/[^\/]+/);
+  if (!m) throw new Error('Μη έγκυρη συσκευή');
+  const keys = vapidKeys_();
+  const head = b64u_(utf8_(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const body = b64u_(utf8_(JSON.stringify({ aud: m[0], exp: Math.floor(Date.now() / 1000) + 3600, sub: 'https://locabeat.github.io/householddesk/' })));
+  const sig = ecdsaSign_(utf8_(head + '.' + body), keys.d, sha256G_, hmacG_);
+  const jwt = head + '.' + body + '.' + b64u_(sig);
+  const res = UrlFetchApp.fetch(endpoint, {
+    method: 'post', muteHttpExceptions: true, payload: '',
+    headers: { TTL: '86400', Urgency: 'high', Authorization: 'vapid t=' + jwt + ', k=' + keys.pub },
+  });
+  return res.getResponseCode();
+}
+
+/** Καταχωρεί (ή ενημερώνει) τη συσκευή και την ώρα της υπενθύμισης. */
+function pushSave_(p, profile) {
+  const sub = p.sub || {};
+  const endpoint = str_(sub.endpoint);
+  if (!/^https:\/\//.test(endpoint)) throw new Error('Μη έγκυρη συσκευή');
+  const time = /^\d{2}:\d{2}$/.test(str_(p.time)) ? str_(p.time) : '21:00';
+  const inf = info_('push');
+  const i = inf.rows.findIndex(r => inf.mine(r, profile) && str_(r[inf.idx.endpoint]) === endpoint);
+  if (i >= 0) {
+    inf.sh.getRange(i + 2, inf.idx.time + 1).setValue(toCell_('time', time));
+    inf.sh.getRange(i + 2, inf.idx.device + 1).setValue(str_(p.device));
+  } else {
+    add_('push', { endpoint, p256dh: str_(sub.keys && sub.keys.p256dh), auth: str_(sub.keys && sub.keys.auth), time, last: '', device: str_(p.device) }, profile);
+  }
+  ensurePushTrigger_();
+  return {};
+}
+
+function pushDelete_(p, profile) {
+  const inf = info_('push');
+  for (let i = inf.rows.length - 1; i >= 0; i--) {
+    if (inf.mine(inf.rows[i], profile) && str_(inf.rows[i][inf.idx.endpoint]) === str_(p.endpoint)) inf.sh.deleteRow(i + 2);
+  }
+  return {};
+}
+
+/** Ο έλεγχος τρέχει μόνος του κάθε 5 λεπτά (Triggers του Apps Script). */
+function ensurePushTrigger_() {
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'pushTick')) {
+    ScriptApp.newTrigger('pushTick').timeBased().everyMinutes(5).create();
+  }
+}
+
+/** Τρέξ' το μία φορά από τον επεξεργαστή για να δώσεις άδεια (ειδοποιήσεις + αυτόματος έλεγχος). */
+function setupPush() {
+  vapidKeys_();
+  ensurePushTrigger_();
+  UrlFetchApp.fetch('https://www.google.com/generate_204', { muteHttpExceptions: true });
+  return 'OK — οι ειδοποιήσεις είναι έτοιμες';
+}
+
+/** Τι πρέπει να θυμηθεί κάποιος σήμερα: αν πέρασε κινήσεις και αν έχει πάγια για χρέωση. */
+function reminderFor_(profile) {
+  const tz = tz_(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const day = v => v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : str_(v);
+  const tx = info_('tx'), house = info_('house'), rec = info_('rec'), hrec = info_('houseRec');
+  const count = tx.rows.filter(r => tx.mine(r, profile) && day(r[tx.idx.date]) === today).length
+    + house.rows.filter(r => house.isData(r) && str_(r[house.idx.addedBy]) === profile && day(r[house.idx.date]) === today).length;
+  const due = rec.rows.filter(r => rec.mine(r, profile) && day(r[rec.idx.next]) && day(r[rec.idx.next]) <= today).length;
+  const hdue = hrec.rows.filter(r => hrec.isData(r) && day(r[hrec.idx.next]) && day(r[hrec.idx.next]) <= today).length;
+  const parts = [];
+  if (!count) parts.push('Δεν έχεις περάσει καμία κίνηση σήμερα.');
+  if (due) parts.push(`Έχεις ${due} ${due === 1 ? 'πάγιο' : 'πάγια'} για χρέωση.`);
+  if (hdue) parts.push(`Στο Σπίτι: ${hdue} ${hdue === 1 ? 'πάγιο' : 'πάγια'} για πληρωμή.`);
+  return {
+    needed: parts.length > 0,
+    title: parts.length ? '📝 Household Desk' : '✓ Household Desk',
+    body: parts.length ? parts.join(' ') : `Σήμερα πέρασες ${count} ${count === 1 ? 'κίνηση' : 'κινήσεις'}. Όλα εντάξει!`,
+  };
+}
+
+/** Κάθε 5 λεπτά: όποια συσκευή έφτασε η ώρα της (και δεν έχει ειδοποιηθεί σήμερα) παίρνει υπενθύμιση, αν χρειάζεται. */
+function pushTick() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    const tz = tz_(), now = new Date();
+    const hhmm = Utilities.formatDate(now, tz, 'HH:mm'), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+    const inf = info_('push');
+    const cache = {};
+    for (let i = inf.rows.length - 1; i >= 0; i--) {
+      const r = inf.rows[i];
+      if (!inf.isData(r)) continue;
+      const time = r[inf.idx.time] instanceof Date ? Utilities.formatDate(r[inf.idx.time], tz, 'HH:mm') : str_(r[inf.idx.time]);
+      const last = r[inf.idx.last] instanceof Date ? Utilities.formatDate(r[inf.idx.last], tz, 'yyyy-MM-dd') : str_(r[inf.idx.last]);
+      if (last === today || !time || time > hhmm) continue;
+      const profile = str_(r[inf.idx.profile]);
+      const msg = cache[profile] || (cache[profile] = reminderFor_(profile));
+      if (msg.needed) {
+        const code = sendPush_(str_(r[inf.idx.endpoint]));
+        if (code === 404 || code === 410) { inf.sh.deleteRow(i + 2); continue; }   // η συσκευή δεν υπάρχει πια
+      }
+      inf.sh.getRange(i + 2, inf.idx.last + 1).setValue("'" + today);
+    }
+  } finally {
+    lock.releaseLock();
+  }
 }

@@ -112,7 +112,14 @@ let chart = null;
 let busyCount = 0;
 
 function saveData() { store.set('household.data', data); }
-function saveCfg() { store.set('household.cfg', cfg); }
+function saveCfg() { store.set('household.cfg', cfg); syncCfgCache(); }
+/** Ο service worker χρειάζεται τη σύνδεση για να φέρει το κείμενο της ειδοποίησης (το localStorage δεν το βλέπει). */
+function syncCfgCache() {
+  if (!('caches' in window)) return;
+  caches.open('household-cfg').then(c => cfg.pin && cfg.url && cfg.url !== 'demo'
+    ? c.put('cfg', new Response(JSON.stringify({ url: cfg.url, pin: cfg.pin }), { headers: { 'Content-Type': 'application/json' } }))
+    : c.delete('cfg')).catch(() => {});
+}
 function logout() {
   cfg = { url: cfg.url === 'demo' ? API_URL : cfg.url, pin: '' };
   saveCfg();
@@ -1988,7 +1995,8 @@ function renderSettings(v) {
       <div class="set-row">
         <div><b>Ασφάλεια</b><small class="muted">Άλλαξε το PIN εισόδου σου</small></div>
         <button class="btn small" id="pinBtn">🔒 Αλλαγή PIN</button>
-      </div>`}
+      </div>
+      ${pushRow()}`}
     </section>
 
     <div class="seg big set-switch" id="setSection">
@@ -2002,11 +2010,110 @@ function renderSettings(v) {
   $$('#themeSeg button', v).forEach(b => b.onclick = () => { store.set('household.theme', b.dataset.v); applyTheme(); render(); });
   $('#syncNow').onclick = () => refresh();
   if ($('#pinBtn')) $('#pinBtn').onclick = openChangePin;
+  wirePushRow(v);
   $$('#setSection button', v).forEach(b => b.onclick = () => { ui.setSection = b.dataset.v; render(); });
 
   if (ui.setSection === 'shop') renderShopSettings($('#setBody'));
   else if (ui.setSection === 'house') renderHouseSettings($('#setBody'));
   else renderFinSettings($('#setBody'));
+}
+
+/* ----- ειδοποιήσεις (Web Push) ----- */
+
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushState = () => store.get('household.push', null);   // { endpoint, time } όταν είναι ενεργές σε αυτή τη συσκευή
+function b64uToBytes(s) {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+}
+const deviceName = () => { const u = navigator.userAgent; return /iPhone/.test(u) ? 'iPhone' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? 'Android' : /Windows/.test(u) ? 'Windows' : /Mac/.test(u) ? 'Mac' : 'Συσκευή'; };
+
+/** Γραμμή «Ειδοποιήσεις» στις Ρυθμίσεις: ώρα καθημερινής υπενθύμισης, ανά συσκευή. */
+function pushRow() {
+  const st = pushState();
+  const iosNotInstalled = /iPhone|iPad/.test(navigator.userAgent) && !isStandalone();
+  if (!pushSupported() || iosNotInstalled) return `
+    <div class="set-row">
+      <div><b>Ειδοποιήσεις</b><small class="muted">${iosNotInstalled
+        ? 'Στο iPhone δουλεύουν όταν ανοίγεις το app από την αρχική οθόνη (όχι από το Safari).'
+        : 'Αυτός ο browser δεν υποστηρίζει ειδοποιήσεις.'}</small></div>
+    </div>`;
+  return `
+    <div class="set-row push-row">
+      <div><b>Ειδοποιήσεις</b><small class="muted">${st
+        ? `Κάθε μέρα στις ${esc(st.time)}, αν δεν πέρασες κινήσεις ή έχεις πάγια για χρέωση.`
+        : 'Υπενθύμιση κάθε μέρα την ώρα που θες, αν δεν πέρασες κινήσεις ή έχεις πάγια.'}</small></div>
+      <div class="push-ctrls">
+        <input id="pushTime" type="time" value="${esc(st ? st.time : '21:00')}" aria-label="Ώρα υπενθύμισης">
+        ${st ? `<button class="btn small" id="pushTest">Δοκιμή</button>
+                <button class="btn small" id="pushOff">Απενεργοποίηση</button>`
+             : '<button class="btn small primary" id="pushOn">🔔 Ενεργοποίηση</button>'}
+      </div>
+    </div>`;
+}
+
+function wirePushRow(v) {
+  const on = $('#pushOn', v), off = $('#pushOff', v), test = $('#pushTest', v), time = $('#pushTime', v);
+  if (on) on.onclick = () => pushEnable(time.value || '21:00');
+  if (off) off.onclick = pushDisable;
+  if (test) test.onclick = pushTest;
+  if (time && pushState()) time.onchange = () => pushEnable(time.value || '21:00', true);
+}
+
+async function pushEnable(time, quiet = false) {
+  // Η άδεια ζητιέται αμέσως με το πάτημα (το iPhone το απαιτεί).
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Δεν δόθηκε άδεια για ειδοποιήσεις. Άλλαξέ το από τις Ρυθμίσεις του κινητού → Household Desk → Ειδοποιήσεις.', true);
+  setBusy(true);
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api('pushKey');
+    const opts = { userVisibleOnly: true, applicationServerKey: b64uToBytes(key) };
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe(opts);
+    await api('pushSave', { sub: sub.toJSON(), time, device: deviceName() });
+    store.set('household.push', { endpoint: sub.endpoint, time });
+    syncCfgCache();
+    toast(quiet ? `Η υπενθύμιση άλλαξε: ${time}` : `🔔 Ειδοποιήσεις ενεργές — κάθε μέρα στις ${time}`);
+    render();
+  } catch (e) {
+    toast('Οι ειδοποιήσεις δεν ενεργοποιήθηκαν: ' + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function pushDisable() {
+  setBusy(true);
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    const endpoint = sub ? sub.endpoint : pushState()?.endpoint;
+    if (endpoint) await api('pushDelete', { endpoint });
+    if (sub) await sub.unsubscribe();
+    store.set('household.push', null);
+    toast('Οι ειδοποιήσεις σταμάτησαν σε αυτή τη συσκευή');
+    render();
+  } catch (e) {
+    toast('Σφάλμα: ' + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function pushTest() {
+  setBusy(true);
+  try {
+    const { code } = await api('pushTest', { endpoint: pushState().endpoint });
+    if (code >= 200 && code < 300) toast('Στάλθηκε! Θα έρθει σε λίγα δευτερόλεπτα 🔔');
+    else if (code === 403) toast('Χρειάζεται μια άδεια στο Apps Script (setupPush) — δες τις οδηγίες.', true);
+    else toast(`Η δοκιμή δεν πέρασε (κωδικός ${code})`, true);
+  } catch (e) {
+    toast('Σφάλμα: ' + e.message, true);
+  } finally {
+    setBusy(false);
+  }
 }
 
 function openChangePin() {
@@ -3065,6 +3172,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#overl
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 render();
+syncCfgCache();
 if (loggedIn()) refresh(true);
 
 if ('serviceWorker' in navigator) {
