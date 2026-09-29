@@ -261,14 +261,20 @@ function wireAccChips(body, attr, set) {
 async function api(action, payload = {}) {
   if (cfg.url === 'demo') return mockApi(action, payload);
   let res;
+  // Πολύ αδύναμο σήμα: μετά από 25 δευτερόλεπτα το θεωρούμε «χωρίς internet» (η αλλαγή μπαίνει σε αναμονή).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
     res = await fetch(cfg.url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ ...payload, action, pin: cfg.pin }),
+      signal: ctrl.signal,
     });
   } catch {
     throw new Error('Δεν υπάρχει σύνδεση');
+  } finally {
+    clearTimeout(timer);
   }
   let j;
   try { j = await res.json(); } catch { throw new Error('Μη έγκυρη απάντηση — έλεγξε το URL'); }
@@ -278,6 +284,12 @@ async function api(action, payload = {}) {
 
 async function refresh(silent = false) {
   if (!loggedIn()) { ui.tab = 'login'; render(); return false; }
+  // Πρώτα στέλνονται όσα περιμένουν. Αν μείνει κάτι (χωρίς internet), κρατάμε τα τοπικά δεδομένα.
+  await flushQueue();
+  if (pending().length) {
+    if (!silent) toast('📴 Χωρίς internet — οι αλλαγές σου περιμένουν να σταλούν', true);
+    return false;
+  }
   setBusy(true);
   try {
     data = normalize(await api('all'));
@@ -288,32 +300,110 @@ async function refresh(silent = false) {
     return true;
   } catch (e) {
     if (e.message === 'Λάθος PIN') { logout(); toast('Λάθος PIN', true); }
-    else toast('Δεν έγινε ενημέρωση: ' + e.message, true);
+    else if (!(silent && isOffline(e) && data.profile)) toast('Δεν έγινε ενημέρωση: ' + e.message, true);
     return false;
   } finally {
     setBusy(false);
   }
 }
 
-/** Στέλνει μια αλλαγή στο Sheet και ενημερώνει τα τοπικά δεδομένα. */
+/* ----- χωρίς internet: ουρά αλλαγών ----- */
+
+// Προσθήκες, αλλαγές και διαγραφές μπορούν να περιμένουν στη συσκευή και να σταλούν αργότερα, με τη σειρά.
+const QUEUEABLE = ['add', 'update', 'delete'];
+const OFFLINE = 'Δεν υπάρχει σύνδεση';
+const isOffline = e => e && e.message === OFFLINE;
+const pending = () => store.get('household.queue', []);
+function setPending(q) { store.set('household.queue', q); showPending(); }
+function showPending() {
+  const n = pending().length;
+  const el = $('#pending');
+  el.hidden = !n || !loggedIn();
+  el.textContent = `📴 ${n}`;
+  el.title = `${n} ${n === 1 ? 'αλλαγή περιμένει' : 'αλλαγές περιμένουν'} να σταλεί${n === 1 ? '' : 'ούν'}`;
+}
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2));
+
+let flushing = null;
+/** Στέλνει τις αλλαγές που περιμένουν, με τη σειρά. Σταματάει αν ξαναχαθεί το internet. */
+function flushQueue() {
+  // Αν τρέχει ήδη αποστολή (π.χ. ξεκίνησε όσο δεν υπήρχε internet), ξαναδοκιμάζουμε μόλις τελειώσει.
+  if (flushing) return flushing.then(() => (pending().length ? flushQueue() : undefined));
+  if (!pending().length) return Promise.resolve();
+  flushing = sendPending().finally(() => { flushing = null; });
+  return flushing;
+}
+async function sendPending() {
+  let sent = 0;
+  while (pending().length) {
+    const op = pending()[0];
+    try {
+      await api(op.action, op.payload);
+    } catch (e) {
+      if (isOffline(e) || e.message === 'Λάθος PIN') break;
+      // Π.χ. η εγγραφή σβήστηκε στο μεταξύ από τον άλλον: η αλλαγή δεν γίνεται, συνεχίζουμε.
+      toast('Μια αλλαγή δεν στάλθηκε: ' + e.message, true);
+    }
+    setPending(pending().slice(1));
+    sent++;
+  }
+  if (sent) toast(`✓ Στάλθηκ${sent === 1 ? 'ε 1 αλλαγή' : `αν ${sent} αλλαγές`} που περίμεναν`);
+}
+
+/** Εφαρμόζει μια αλλαγή στα τοπικά δεδομένα (res = ό,τι γύρισε ο server, ή εκτίμηση όταν δεν υπάρχει internet). */
+function applyLocal(action, payload, res = {}) {
+  const sheet = payload.sheet;
+  if (action === 'add') data[sheet].push({ ...payload.row, ...res });
+  else if (action === 'update') Object.assign(data[sheet].find(r => r.id === payload.row.id) || {}, payload.row, res);
+  else if (action === 'delete') data[sheet] = data[sheet].filter(r => r.id !== payload.id);
+  data = normalize(data);
+  saveData();
+}
+/** Τι θα έβαζε ο server σε μια αλλαγή, για να φαίνεται σωστά μέχρι να σταλεί. */
+function guessRes(action, payload) {
+  const me = data.profile;
+  if (action === 'add' && payload.sheet === 'shop') return { addedBy: me, done: false, doneBy: '', doneAt: '' };
+  if (action === 'add' && payload.sheet === 'house') return { addedBy: me };
+  if (action === 'update' && payload.sheet === 'shop' && 'done' in payload.row) {
+    const d = new Date();
+    return payload.row.done ? { doneBy: me, doneAt: `${isoDate(d)} ${d.toTimeString().slice(0, 5)}` } : { doneBy: '', doneAt: '' };
+  }
+  return {};
+}
+
+/** Στέλνει μια αλλαγή στο Sheet και ενημερώνει τα τοπικά δεδομένα. Χωρίς internet, την κρατάει για αργότερα. */
 async function run(action, payload, okMsg) {
+  const canQueue = QUEUEABLE.includes(action) && cfg.url !== 'demo';
+  // Κάθε νέα εγγραφή παίρνει ID από τη συσκευή, ώστε να μη γραφτεί ποτέ διπλή.
+  if (action === 'add') payload = { ...payload, row: { id: newId(), ...payload.row } };
+  const queueIt = () => {
+    setPending([...pending(), { action, payload }]);
+    const res = guessRes(action, payload);
+    applyLocal(action, payload, res);
+    render();
+    toast(`📴 ${okMsg ? okMsg + ' — ' : ''}θα σταλεί μόλις βρεις internet`);
+    return res;
+  };
+  // Αν ήδη περιμένουν αλλαγές, η νέα μπαίνει πίσω τους για να κρατηθεί η σειρά.
+  if (canQueue && pending().length) {
+    const res = queueIt();
+    refresh(true);
+    return res;
+  }
   setBusy(true);
   try {
     const res = await api(action, payload);
     const sheet = payload.sheet;
-    if (action === 'add') data[sheet].push({ ...payload.row, ...res });
-    else if (action === 'update') Object.assign(data[sheet].find(r => r.id === payload.row.id) || {}, payload.row, res);
-    else if (action === 'delete') data[sheet] = data[sheet].filter(r => r.id !== payload.id);
-    else data = await api('all');
-    data = normalize(data);
-    saveData();
+    if (QUEUEABLE.includes(action)) applyLocal(action, payload, res);
+    else { data = normalize(await api('all')); saveData(); }
     render();
     if (okMsg) toast(okMsg);
     // Τα ψώνια είναι κοινά και ο server ενημερώνει και τα αποθηκευμένα προϊόντα: συγχρονισμός στο παρασκήνιο.
     if (['shop', 'prod', 'house', 'houseCat', 'houseRec'].includes(sheet)) refresh(true);
     return res || true;
   } catch (e) {
-    toast('Σφάλμα: ' + e.message, true);
+    if (canQueue && isOffline(e)) return queueIt();
+    toast(isOffline(e) ? '📴 Αυτό χρειάζεται internet' : 'Σφάλμα: ' + e.message, true);
     return false;
   } finally {
     setBusy(false);
@@ -420,7 +510,7 @@ function mockApi(action, p) {
   };
   if (action === 'all') { const { photos, ...rest } = db; res = { ...rest, profile: 'Δοκιμή' }; }
   else if (action === 'add') {
-    const row = { ...p.row, id: uid() };
+    const row = { ...p.row, id: p.row.id || uid() };
     if (p.sheet === 'house') row.addedBy = 'Δοκιμή';
     if (p.sheet === 'shop') Object.assign(row, { addedBy: 'Δοκιμή', done: false, doneBy: '', doneAt: '', photo: remember(row.name, row.photo, row.list) });
     db[p.sheet].push(row);
@@ -504,6 +594,7 @@ function render() {
   const due = ui.tab === 'login' ? 0 : dueRecs().length;
   $('#dueBadge').hidden = !due;
   $('#dueBadge').textContent = due;
+  showPending();
   const v = $('#view');
   if (chart) { chart.destroy(); chart = null; }
   if (ui.tab === 'login') renderLogin(v);
@@ -2711,6 +2802,10 @@ $('#shopBtn').onclick = () => {
 // Τα ψώνια είναι κοινά: ανανέωση όταν ξαναγυρνάς στο app και κάθε λίγο όσο είσαι στα Ψώνια.
 const idle = () => $('#overlay').classList.contains('hidden') && document.activeElement?.id !== 'qaName';
 document.addEventListener('visibilitychange', () => { if (!document.hidden && loggedIn() && idle()) refresh(true); });
+// Χωρίς internet: μόλις επιστρέψει, στέλνονται όσα περιμένουν.
+window.addEventListener('online', () => { if (loggedIn()) refresh(true); });
+setInterval(() => { if (pending().length && loggedIn() && !document.hidden) refresh(true); }, 30000);
+$('#pending').onclick = () => { toast($('#pending').title + ' — θα σταλούν αυτόματα μόλις βρεις internet'); refresh(true); };
 setInterval(() => { if ((ui.tab === 'shop' || ui.tab === 'house') && !document.hidden && loggedIn() && idle()) refresh(true); }, 30000);
 $('#sheetClose').onclick = closeSheet;
 $('#overlay').onclick = e => { if (e.target.id === 'overlay') closeSheet(); };

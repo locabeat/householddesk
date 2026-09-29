@@ -594,3 +594,9 @@ img.zoom.loaded { opacity: 1; }
 .pct-row input { width: 70px; text-align: center; }
 .split-preview { margin: 8px 2px 0; }
 .list-head > span { display: flex; align-items: center; gap: 4px; }
+
+/* χωρίς internet */
+.pending { border: 0; border-radius: 999px; padding: 6px 11px; font-size: 13px; font-weight: 700; background: #b8742f; color: #fff; box-shadow: 0 4px 14px rgba(184, 116, 47, .35); animation: pulse 2s ease-in-out infinite; }
+.pending[hidden] { display: none; }
+@keyframes pulse { 50% { opacity: .7; } }
+body.logged-out #pending { display: none; }

@@ -225,6 +225,13 @@ function findRow_(inf, id, profile) {
 }
 
 function add_(key, row, profile) {
+  // Το app δίνει δικό του ID (για καταχωρήσεις χωρίς internet). Αν έχει ήδη γραφτεί, δεν το ξαναγράφουμε.
+  const cid = str_(row.id);
+  if (cid) {
+    const inf0 = info_(key);
+    const r = inf0.rows.find(x => str_(x[inf0.idx.id]) === cid);
+    if (r) return { id: cid, addedBy: inf0.idx.addedBy != null ? str_(r[inf0.idx.addedBy]) : '', photo: inf0.idx.photo != null ? str_(r[inf0.idx.photo]) : '' };
+  }
   if (key === 'shop') {
     row.addedBy = profile; row.done = false; row.doneBy = ''; row.doneAt = '';
     // Ίδιο προϊόν με πριν: παίρνει την αποθηκευμένη φωτογραφία του.
@@ -233,7 +240,7 @@ function add_(key, row, profile) {
   if (key === 'house') row.addedBy = profile;
   const inf = info_(key);
   const out = new Array(inf.width).fill('');
-  row.id = Utilities.getUuid();
+  row.id = cid || Utilities.getUuid();
   if (!inf.def.shared) row.profile = profile;
   for (const k in inf.idx) out[inf.idx[k]] = toCell_(k, row[k]);
   inf.sh.getRange(inf.rows.length + 2, 1, 1, inf.width).setValues([out]);
