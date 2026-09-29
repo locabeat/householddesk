@@ -1,6 +1,6 @@
 // Κρατάει τα αρχεία του app για να ανοίγει γρήγορα και χωρίς internet.
 // Αλλάζεις τον αριθμό σε κάθε νέα έκδοση ώστε να ανανεωθεί η cache.
-const CACHE = 'household-v24';
+const CACHE = 'household-v25';
 // Η σύνδεση (διεύθυνση + PIN) για τις ειδοποιήσεις· τη γράφει το app όταν συνδέεσαι.
 const CFG_CACHE = 'household-cfg';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png?v=2', 'icons/icon-512.png?v=2', 'icons/apple-touch-icon.png?v=2', 'icons/favicon.png?v=2'];

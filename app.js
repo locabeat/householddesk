@@ -2042,8 +2042,8 @@ function pushRow() {
   return `
     <div class="set-row push-row">
       <div><b>Ειδοποιήσεις</b><small class="muted">${st
-        ? `Κάθε μέρα στις ${esc(st.time)}, αν δεν πέρασες κινήσεις ή έχεις πάγια για χρέωση.`
-        : 'Υπενθύμιση κάθε μέρα την ώρα που θες, αν δεν πέρασες κινήσεις ή έχεις πάγια.'}</small></div>
+        ? `Κάθε μέρα στις ${esc(st.time)}: «έλεγχος ημέρας» με ό,τι πέρασες σήμερα, για να δεις αν ξέχασες κάτι.`
+        : 'Κάθε μέρα την ώρα που θες, ένας «έλεγχος ημέρας»: τι πέρασες σήμερα και αν έχεις πάγια.'}</small></div>
       <div class="push-ctrls">
         <input id="pushTime" type="time" value="${esc(st ? st.time : '21:00')}" aria-label="Ώρα υπενθύμισης">
         ${st ? `<button class="btn small" id="pushTest">Δοκιμή</button>

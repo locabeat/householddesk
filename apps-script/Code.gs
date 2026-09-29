@@ -751,24 +751,34 @@ function setupPush() {
   return 'OK — οι ειδοποιήσεις είναι έτοιμες';
 }
 
-/** Τι πρέπει να θυμηθεί κάποιος σήμερα: αν πέρασε κινήσεις και αν έχει πάγια για χρέωση. */
+/**
+ * Ο καθημερινός «έλεγχος ημέρας»: τι έχεις περάσει σήμερα (για να θυμηθείς τι λείπει)
+ * και αν έχεις πάγια για χρέωση. Στέλνεται κάθε μέρα, ακόμα κι αν έχεις περάσει κινήσεις.
+ */
 function reminderFor_(profile) {
   const tz = tz_(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const day = v => v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : str_(v);
+  const money = n => (Math.round(n * 100) / 100).toFixed(2).replace('.', ',') + ' €';
   const tx = info_('tx'), house = info_('house'), rec = info_('rec'), hrec = info_('houseRec');
-  const count = tx.rows.filter(r => tx.mine(r, profile) && day(r[tx.idx.date]) === today).length
-    + house.rows.filter(r => house.isData(r) && str_(r[house.idx.addedBy]) === profile && day(r[house.idx.date]) === today).length;
+  const mineToday = tx.rows.filter(r => tx.mine(r, profile) && day(r[tx.idx.date]) === today);
+  const houseToday = house.rows.filter(r => house.isData(r) && str_(r[house.idx.addedBy]) === profile && day(r[house.idx.date]) === today);
+  const count = mineToday.length + houseToday.length;
+  const spent = mineToday.filter(r => str_(r[tx.idx.type]) === 'Έξοδο').reduce((s, r) => s + (Number(r[tx.idx.amount]) || 0), 0);
+  // Ονόματα για να θυμηθείς τι πέρασες (υποκατηγορία ή κατηγορία).
+  const names = [];
+  mineToday.forEach(r => { const n = str_(r[tx.idx.sub]) || str_(r[tx.idx.cat]) || str_(r[tx.idx.note]); if (n && names.indexOf(n) < 0) names.push(n); });
+  houseToday.forEach(r => { const n = '🏠 ' + (str_(r[house.idx.cat]) || 'Σπίτι'); if (names.indexOf(n) < 0) names.push(n); });
   const due = rec.rows.filter(r => rec.mine(r, profile) && day(r[rec.idx.next]) && day(r[rec.idx.next]) <= today).length;
   const hdue = hrec.rows.filter(r => hrec.isData(r) && day(r[hrec.idx.next]) && day(r[hrec.idx.next]) <= today).length;
   const parts = [];
-  if (!count) parts.push('Δεν έχεις περάσει καμία κίνηση σήμερα.');
+  if (!count) parts.push('Δεν έχεις περάσει καμία κίνηση σήμερα. Ξόδεψες κάτι; Πέρασέ το τώρα.');
+  else {
+    const list = names.slice(0, 4).join(', ') + (names.length > 4 ? ' κ.ά.' : '');
+    parts.push(`Σήμερα πέρασες ${count} ${count === 1 ? 'κίνηση' : 'κινήσεις'}${spent ? ` (−${money(spent)})` : ''}: ${list}. Μήπως ξέχασες κάποια αγορά; Έλεγξε ότι τα πέρασες όλα 🧾`);
+  }
   if (due) parts.push(`Έχεις ${due} ${due === 1 ? 'πάγιο' : 'πάγια'} για χρέωση.`);
   if (hdue) parts.push(`Στο Σπίτι: ${hdue} ${hdue === 1 ? 'πάγιο' : 'πάγια'} για πληρωμή.`);
-  return {
-    needed: parts.length > 0,
-    title: parts.length ? '📝 Household Desk' : '✓ Household Desk',
-    body: parts.length ? parts.join(' ') : `Σήμερα πέρασες ${count} ${count === 1 ? 'κίνηση' : 'κινήσεις'}. Όλα εντάξει!`,
-  };
+  return { needed: true, title: '🧾 Έλεγχος ημέρας', body: parts.join(' ') };
 }
 
 /** Κάθε 5 λεπτά: όποια συσκευή έφτασε η ώρα της (και δεν έχει ειδοποιηθεί σήμερα) παίρνει υπενθύμιση, αν χρειάζεται. */
